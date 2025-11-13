@@ -1,0 +1,12 @@
+<RCC>
+    <qresource prefix="/">
+        <file alias="main.qml">../qml/main.qml</file>
+        <file alias="components/SegmentRow.qml">../qml/components/SegmentRow.qml</file>
+        <file alias="components/PrimaryButton.qml">../qml/components/PrimaryButton.qml</file>
+        <file alias="components/StatusBadge.qml">../qml/components/StatusBadge.qml</file>
+        <file alias="theme/Colors.qml">../qml/theme/Colors.qml</file>
+        <file alias="theme/Theme.qml">../qml/theme/Theme.qml</file>
+        <file alias="theme/qmldir">../qml/theme/qmldir</file>
+    </qresource>
+</RCC>
+
