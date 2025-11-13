@@ -36,10 +36,5 @@ if(Qt5QuickWidgets_FOUND)
     # QtGraphicalEffects is available through QuickWidgets
 endif()
 
-# Android extras for deployment
-if (ANDROID)
-    find_package(Qt5 ${QT_MIN_VERSION} COMPONENTS AndroidExtras QUIET)
-endif()
-
 add_subdirectory(src)
 

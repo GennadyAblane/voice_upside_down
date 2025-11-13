@@ -83,9 +83,8 @@ if (ANDROID)
     set(ANDROID_TARGET_SDK_VERSION 33)
     
     # Qt Android deployment
-    find_package(Qt5 ${QT_MIN_VERSION} COMPONENTS AndroidExtras QUIET)
-    if(Qt5AndroidExtras_FOUND)
-        qt5_android_deploy()
-    endif()
+    # Note: qt5_android_deploy() is not available in Qt 5.15.2
+    # Android APK will be built using androiddeployqt via Qt Creator's "Build Android APK" button
+    # or manually using androiddeployqt tool
 endif()
 
