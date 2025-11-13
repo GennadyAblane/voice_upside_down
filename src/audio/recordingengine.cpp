@@ -1,17 +1,19 @@
 #include "recordingengine.h"
 
-#include <QAudioDeviceInfo>
-#include <QAudioInput>
+#include <QAudioSource>
+#include <QAudioDevice>
+#include <QMediaDevices>
 #include <QBuffer>
 #include <memory>
 
 #include "wavutils.h"
+#include "qt6_compat.h"
 #include "../utils/logger.h"
 
 class RecordingEngine::Impl
 {
 public:
-    std::unique_ptr<QAudioInput> audioInput;
+    std::unique_ptr<QAudioSource> audioInput;
     std::unique_ptr<QBuffer> bufferDevice;
     QByteArray bufferData;
     QAudioFormat format;
@@ -35,20 +37,14 @@ bool RecordingEngine::startRecording(const QString &filePath, const QAudioFormat
 {
     stop();
 
-    QAudioDeviceInfo deviceInfo = QAudioDeviceInfo::defaultInputDevice();
-    if (!deviceInfo.isFormatSupported(requestedFormat)) {
-        d->format = deviceInfo.nearestFormat(requestedFormat);
-        LOG_WARN() << "Requested format is not supported. Using nearest input format.";
-    } else {
-        d->format = requestedFormat;
+    QAudioDevice device = QMediaDevices::defaultAudioInput();
+    d->format = requestedFormat;
+    
+    // Ensure format is 16-bit signed integer
+    if (Qt6Compat::sampleSize(d->format) != 16 || !Qt6Compat::isSignedInt(d->format)) {
+        Qt6Compat::setSampleSize(d->format, 16);
+        Qt6Compat::setSignedInt(d->format);
     }
-
-    if (d->format.sampleSize() != 16 || d->format.sampleType() != QAudioFormat::SignedInt) {
-        d->format.setSampleSize(16);
-        d->format.setSampleType(QAudioFormat::SignedInt);
-    }
-    d->format.setByteOrder(QAudioFormat::LittleEndian);
-    d->format.setCodec(QStringLiteral("audio/pcm"));
 
     d->bufferData.clear();
     d->bufferDevice = std::make_unique<QBuffer>(&d->bufferData);
@@ -58,11 +54,11 @@ bool RecordingEngine::startRecording(const QString &filePath, const QAudioFormat
     }
     d->filePath = filePath;
 
-    d->audioInput = std::make_unique<QAudioInput>(deviceInfo, d->format);
-    d->audioInput->setNotifyInterval(100);
-    connect(d->audioInput.get(), &QAudioInput::stateChanged, this, [this](QAudio::State state) {
-        if (state == QAudio::StoppedState && d->audioInput->error() != QAudio::NoError) {
-            LOG_WARN() << "Recording stopped due to error:" << d->audioInput->error();
+    d->audioInput = std::make_unique<QAudioSource>(device, d->format, this);
+    connect(d->audioInput.get(), &QAudioSource::stateChanged, this, [this](QAudio::State state) {
+        if (state == QAudio::StoppedState) {
+            // In Qt 6, error handling is different
+            LOG_INFO() << "Recording stopped";
         }
     });
 

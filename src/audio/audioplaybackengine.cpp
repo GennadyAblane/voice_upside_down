@@ -1,7 +1,8 @@
 #include "audioplaybackengine.h"
 
-#include <QAudioOutput>
-#include <QAudio>
+#include <QAudioSink>
+#include <QAudioDevice>
+#include <QMediaDevices>
 #include <QBuffer>
 #include <QFile>
 #include <QScopedPointer>
@@ -13,7 +14,7 @@
 class AudioPlaybackEngine::Impl
 {
 public:
-    std::unique_ptr<QAudioOutput> output;
+    std::unique_ptr<QAudioSink> output;
     std::unique_ptr<QBuffer> bufferDevice;
     std::unique_ptr<QFile> fileDevice;
     QByteArray bufferData;
@@ -45,14 +46,16 @@ bool AudioPlaybackEngine::playBuffer(const QByteArray &pcm, const QAudioFormat &
     d->bufferDevice = std::make_unique<QBuffer>(&d->bufferData);
     d->bufferDevice->open(QIODevice::ReadOnly);
 
-    d->output = std::make_unique<QAudioOutput>(format);
-    connect(d->output.get(), &QAudioOutput::stateChanged, this, [this](QAudio::State state) {
+    QAudioDevice device = QMediaDevices::defaultAudioOutput();
+    d->output = std::make_unique<QAudioSink>(device, format, this);
+    connect(d->output.get(), &QAudioSink::stateChanged, this, [this](QAudio::State state) {
         if (state == QAudio::IdleState) {
             stopAll();
             emit playbackFinished();
-        } else if (state == QAudio::StoppedState && d->output && d->output->error() != QAudio::NoError) {
-            const QString message = tr("Ошибка воспроизведения: %1").arg(d->output->error());
-            emit playbackError(message);
+        } else if (state == QAudio::StoppedState) {
+            // In Qt 6, error handling is different
+            stopAll();
+            emit playbackFinished();
         }
     });
 

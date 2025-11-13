@@ -47,7 +47,7 @@
      - ✅ NDK (Side by side) - выберите версию **r21e** или новее (рекомендуется r25c)
 
 5. **Запомните путь к SDK**
-   - Обычно: `C:\Users\ВашеИмя\AppData\Local\Android\Sdk`
+   - Обычно: `C:\Users\ВашеИмя\AppData\Local\Android\Sdk` (C:\Users\User\AppData\Local\Android\Sdk)
    - Или: `C:\Android\Sdk` (если выбрали другой путь)
 
 ### Вариант B: Установка только SDK (без Android Studio)
@@ -89,7 +89,7 @@
 3. **Укажите пути:**
    - **Android SDK location**: путь к SDK (например, `C:\Users\ВашеИмя\AppData\Local\Android\Sdk`)
    - **Android NDK location**: путь к NDK (например, `C:\Users\ВашеИмя\AppData\Local\Android\Sdk\ndk\25.2.9519653`)
-   - **JDK location**: путь к JDK (например, `C:\Program Files\Java\jdk-11`)
+   - **JDK location**: путь к JDK (например, `C:\Program Files\Java\jdk-21`)
 
 4. **Нажмите "Apply"**
 

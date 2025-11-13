@@ -7,6 +7,7 @@
 #include "audio/recordingengine.h"
 #include "audio/segmentmodel.h"
 #include "audio/wavutils.h"
+#include "audio/qt6_compat.h"
 #include "persistence/projectserializer.h"
 #include "utils/logger.h"
 #include "utils/pathutils.h"
@@ -168,10 +169,8 @@ void AppController::startSourceRecording()
     QAudioFormat format;
     format.setChannelCount(1);
     format.setSampleRate(44100);
-    format.setSampleSize(16);
-    format.setSampleType(QAudioFormat::SignedInt);
-    format.setCodec(QStringLiteral("audio/pcm"));
-    format.setByteOrder(QAudioFormat::LittleEndian);
+    Qt6Compat::setSampleSize(format, 16);
+    Qt6Compat::setSignedInt(format);
 
     if (!m_recorder->startRecording(filePath, format)) {
         setStatusMessage(tr("Ошибка начала записи"));
@@ -363,10 +362,8 @@ void AppController::toggleSegmentRecording(int segmentIndex)
     if (!format.isValid()) {
         format.setChannelCount(1);
         format.setSampleRate(44100);
-        format.setSampleSize(16);
-        format.setSampleType(QAudioFormat::SignedInt);
-        format.setCodec(QStringLiteral("audio/pcm"));
-        format.setByteOrder(QAudioFormat::LittleEndian);
+        Qt6Compat::setSampleSize(format, 16);
+        Qt6Compat::setSignedInt(format);
     }
 
     if (!m_recorder->startRecording(segment->recordingPath, format)) {
@@ -542,7 +539,7 @@ void AppController::toggleSegmentReversePlayback(int segmentIndex)
         
         LOG_INFO() << "Extracted original segment" << segmentIndex << "size" << pcm.size() 
                    << "format:" << format.channelCount() << "ch" << format.sampleRate() << "Hz"
-                   << format.sampleSize() << "bit" << (format.sampleType() == QAudioFormat::SignedInt ? "signed" : "float");
+                   << Qt6Compat::sampleSize(format) << "bit" << (Qt6Compat::isSignedInt(format) ? "signed" : "float");
         
         if (!format.isValid()) {
             setStatusMessage(tr("Ошибка: неверный формат для сегмента %1").arg(segmentIndex));
@@ -552,15 +549,13 @@ void AppController::toggleSegmentReversePlayback(int segmentIndex)
 
         // Ensure format is 16-bit PCM for WAV writing
         // Note: format may already be 16-bit PCM from MP3 decoder, but we ensure it's correct
-        if (format.sampleSize() != 16 || format.sampleType() != QAudioFormat::SignedInt) {
+        if (Qt6Compat::sampleSize(format) != 16 || !Qt6Compat::isSignedInt(format)) {
             LOG_INFO() << "Format needs conversion for segment" << segmentIndex 
-                       << "current:" << format.sampleSize() << "bit" 
-                       << (format.sampleType() == QAudioFormat::SignedInt ? "signed" : "float");
+                       << "current:" << Qt6Compat::sampleSize(format) << "bit" 
+                       << (Qt6Compat::isSignedInt(format) ? "signed" : "float");
             // Data is already in correct format from decoder, just update format metadata
-            format.setSampleSize(16);
-            format.setSampleType(QAudioFormat::SignedInt);
-            format.setCodec(QStringLiteral("audio/pcm"));
-            format.setByteOrder(QAudioFormat::LittleEndian);
+            Qt6Compat::setSampleSize(format, 16);
+            Qt6Compat::setSignedInt(format);
         }
         
         // Validate format and data
@@ -581,7 +576,7 @@ void AppController::toggleSegmentReversePlayback(int segmentIndex)
 
         LOG_INFO() << "Writing reverse file for segment" << segmentIndex << "size" << reversed.size() 
                    << "format" << format.channelCount() << "ch" << format.sampleRate() << "Hz"
-                   << format.sampleSize() << "bit" << "to" << segment->reversePath;
+                   << Qt6Compat::sampleSize(format) << "bit" << "to" << segment->reversePath;
         if (!WavUtils::writeWavFile(segment->reversePath, format, reversed, &error)) {
             setStatusMessage(tr("Ошибка создания реверса сегмента %1: %2").arg(segmentIndex).arg(error));
             LOG_WARN() << "Failed to write reverse file:" << segment->reversePath << error;
@@ -659,7 +654,7 @@ void AppController::glueSegments()
             // Ensure format matches
             if (format.sampleRate() != segFormat.sampleRate() ||
                 format.channelCount() != segFormat.channelCount() ||
-                format.sampleSize() != segFormat.sampleSize()) {
+                Qt6Compat::sampleSize(format) != Qt6Compat::sampleSize(segFormat)) {
                 setStatusMessage(tr("Несовместимые форматы сегментов"));
                 LOG_WARN() << "Incompatible segment formats";
                 return;

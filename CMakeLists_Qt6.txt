@@ -1,0 +1,39 @@
+cmake_minimum_required(VERSION 3.21)
+
+project(voice_upside_down LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+if (NOT DEFINED CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose the type of build." FORCE)
+endif()
+
+# Android configuration
+if (ANDROID)
+    set(ANDROID_PACKAGE_NAME "com.voiceupsidedown.master")
+    set(ANDROID_APP_ICON "@mipmap/ic_launcher")
+    set(ANDROID_MIN_SDK_VERSION 21)
+    set(ANDROID_TARGET_SDK_VERSION 33)
+endif()
+
+set(QT_MIN_VERSION "6.7.0")
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
+set(CMAKE_AUTOUIC ON)
+
+# Find Qt6 packages
+find_package(Qt6 ${QT_MIN_VERSION} COMPONENTS
+    Core
+    Gui
+    Quick
+    Qml
+    Multimedia
+    REQUIRED
+)
+
+# Qt6 uses QtQuick instead of QtQuickWidgets
+# QtGraphicalEffects is available in Qt6
+
+add_subdirectory(src)
+

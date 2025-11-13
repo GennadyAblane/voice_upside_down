@@ -10,6 +10,7 @@
 
 #include "../utils/logger.h"
 #include "wavutils.h"
+#include "qt6_compat.h"
 
 #define MINIMP3_IMPLEMENTATION
 #define MINIMP3_NO_SIMD
@@ -78,10 +79,8 @@ bool AudioFileDecoder::decodeFile(const QString &filePath, AudioBuffer &outBuffe
         QAudioFormat format;
         format.setChannelCount(mp3info.channels);
         format.setSampleRate(mp3info.hz);
-        format.setSampleSize(16);
-        format.setCodec(QStringLiteral("audio/pcm"));
-        format.setByteOrder(QAudioFormat::LittleEndian);
-        format.setSampleType(QAudioFormat::SignedInt);
+        Qt6Compat::setSampleSize(format, 16);
+        Qt6Compat::setSignedInt(format);
 
         outBuffer.setFormat(format);
         outBuffer.data() = pcmData;

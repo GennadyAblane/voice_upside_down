@@ -1,4 +1,5 @@
 #include "audiobuffer.h"
+#include "qt6_compat.h"
 
 #include <QtGlobal>
 #include <cstring>
@@ -8,7 +9,7 @@ qint64 bytesPerSample(const QAudioFormat &format)
 {
     if (!format.isValid())
         return 0;
-    const int sampleSize = format.sampleSize();
+    const int sampleSize = Qt6Compat::sampleSize(format);
     if (sampleSize <= 0)
         return 0;
     return sampleSize / 8;

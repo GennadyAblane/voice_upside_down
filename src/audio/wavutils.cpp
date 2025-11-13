@@ -1,4 +1,5 @@
 #include "wavutils.h"
+#include "qt6_compat.h"
 
 #include <QDataStream>
 #include <QFile>
@@ -148,10 +149,8 @@ bool readWavFile(const QString &filePath, QByteArray &pcmData, QAudioFormat &for
 
     format.setChannelCount(channelCount);
     format.setSampleRate(sampleRate);
-    format.setSampleSize(16);
-    format.setSampleType(QAudioFormat::SignedInt);
-    format.setCodec(QStringLiteral("audio/pcm"));
-    format.setByteOrder(QAudioFormat::LittleEndian);
+    Qt6Compat::setSampleSize(format, 16);
+    Qt6Compat::setSignedInt(format);
 
     LOG_INFO() << "WAV loaded:" << filePath << "channels" << channelCount << "rate" << sampleRate;
     return true;
@@ -159,7 +158,7 @@ bool readWavFile(const QString &filePath, QByteArray &pcmData, QAudioFormat &for
 
 bool writeWavFile(const QString &filePath, const QAudioFormat &format, const QByteArray &pcmData, QString *errorString)
 {
-    if (!format.isValid() || format.sampleSize() != 16 || format.sampleType() != QAudioFormat::SignedInt) {
+    if (!format.isValid() || Qt6Compat::sampleSize(format) != 16 || !Qt6Compat::isSignedInt(format)) {
         const QString err = QObject::tr("Для записи WAV требуется 16-битный PCM.");
         if (errorString)
             *errorString = err;
@@ -190,11 +189,12 @@ bool writeWavFile(const QString &filePath, const QAudioFormat &format, const QBy
     stream << quint16(1); // PCM format
     stream << quint16(format.channelCount());
     stream << quint32(format.sampleRate());
-    const quint32 byteRate = format.sampleRate() * format.channelCount() * (format.sampleSize() / 8);
-    const quint16 blockAlign = format.channelCount() * (format.sampleSize() / 8);
+    const int sampleSizeBits = Qt6Compat::sampleSize(format);
+    const quint32 byteRate = format.sampleRate() * format.channelCount() * (sampleSizeBits / 8);
+    const quint16 blockAlign = format.channelCount() * (sampleSizeBits / 8);
     stream << byteRate;
     stream << blockAlign;
-    stream << quint16(format.sampleSize());
+    stream << quint16(sampleSizeBits);
     stream.writeRawData("data", 4);
     stream << dataSize;
 

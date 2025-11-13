@@ -30,12 +30,9 @@ set(RESOURCES
 add_library(minimp3 INTERFACE)
 target_include_directories(minimp3 INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/../thirdparty)
 
-# For Android with Qt 6, use add_executable instead of qt_add_executable
-# to avoid QML import scanning issues with paths containing spaces
-# We'll handle Android deployment manually via qt_android_add_apk_target
+# For Android with Qt 6, use qt_add_executable
 if (ANDROID AND QT_VERSION_MAJOR EQUAL 6)
-    # Use regular add_executable to avoid QML import scanning issues with spaces in path
-    add_executable(voice_upside_down
+    qt_add_executable(voice_upside_down
         ${SOURCES}
         ${RESOURCES}
     )
@@ -60,12 +57,9 @@ if(QT_VERSION_MAJOR EQUAL 6)
         Qt6::Gui
         Qt6::Quick
         Qt6::Qml
+        Qt6::Multimedia
         minimp3
     )
-    # Link Multimedia if available
-    if(TARGET Qt6::Multimedia)
-        target_link_libraries(voice_upside_down PRIVATE Qt6::Multimedia)
-    endif()
 else()
     target_link_libraries(voice_upside_down PRIVATE
         Qt5::Widgets
@@ -105,32 +99,20 @@ if (ANDROID)
     )
     
     # Set minimum SDK version
-    set(ANDROID_MIN_SDK_VERSION 23)  # Minimum required by Qt 6.7.2 Android Kit
+    set(ANDROID_MIN_SDK_VERSION 21)
     set(ANDROID_TARGET_SDK_VERSION 33)
     
-    # Qt 6 Android support
-    # Note: qt_android_add_apk_target may not be available in all Qt 6 versions
-    # Use androiddeployqt manually if needed
+    # Qt 6 has better Android support
     if(QT_VERSION_MAJOR EQUAL 6)
         find_package(Qt6 ${QT_MIN_VERSION} COMPONENTS AndroidExtras QUIET)
         if(Qt6AndroidExtras_FOUND)
-            # Try to use qt_android_add_apk_target if available
-            if(COMMAND qt_android_add_apk_target)
-                qt_android_add_apk_target(voice_upside_down_apk
-                    TARGET voice_upside_down
-                    PACKAGE_NAME ${ANDROID_PACKAGE_NAME}
-                    ANDROID_MANIFEST ${ANDROID_MANIFEST_FILE}
-                    ANDROID_RESOURCES_DIR ${ANDROID_RESOURCES_DIR}
-                )
-                message(STATUS "Qt 6 Android APK target created: voice_upside_down_apk")
-            else()
-                message(STATUS "qt_android_add_apk_target not available. Use androiddeployqt manually:")
-                message(STATUS "  Run: create_apk_qt6.bat in build directory")
-                message(STATUS "  Or use androiddeployqt directly")
-            endif()
-        else()
-            message(STATUS "Qt6AndroidExtras not found. Use androiddeployqt manually:")
-            message(STATUS "  Run: create_apk_qt6.bat in build directory")
+            qt_android_add_apk_target(voice_upside_down_apk
+                TARGET voice_upside_down
+                PACKAGE_NAME ${ANDROID_PACKAGE_NAME}
+                ANDROID_MANIFEST ${ANDROID_MANIFEST_FILE}
+                ANDROID_RESOURCES_DIR ${ANDROID_RESOURCES_DIR}
+            )
+            message(STATUS "Qt 6 Android APK target created: voice_upside_down_apk")
         endif()
     else()
         # Qt 5.15.2 - APK will be built using androiddeployqt via Qt Creator's "Build Android APK" button
