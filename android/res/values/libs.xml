@@ -1,0 +1,21 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <array name="qt_libs">
+        <item>Qt5Core</item>
+        <item>Qt5Gui</item>
+        <item>Qt5Qml</item>
+        <item>Qt5Quick</item>
+        <item>Qt5Multimedia</item>
+        <item>Qt5Network</item>
+    </array>
+    <array name="bundled_libs"/>
+    <array name="bundled_in_lib"/>
+    <array name="bundled_in_assets"/>
+    <array name="qt_sources"/>
+    <array name="qt_runtime_environment">
+        <item>QT_ANDROID_APP_PATH</item>
+        <item>QT_ANDROID_APP_DATA_PATH</item>
+        <item>QT_ANDROID_APP_CACHE_PATH</item>
+    </array>
+</resources>
+

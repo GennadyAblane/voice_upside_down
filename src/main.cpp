@@ -17,7 +17,13 @@ int main(int argc, char *argv[])
     AppController controller;
 
     engine.rootContext()->setContextProperty(QStringLiteral("appController"), &controller);
+    
+    // Для Android используем main_android.qml, для остальных платформ - main.qml
+#ifdef Q_OS_ANDROID
+    engine.load(QUrl(QStringLiteral("qrc:/main_android.qml")));
+#else
     engine.load(QUrl(QStringLiteral("qrc:/main.qml")));
+#endif
 
     if (engine.rootObjects().isEmpty())
         return -1;

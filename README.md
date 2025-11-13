@@ -26,12 +26,28 @@
 
 ## Сборка
 
+### Desktop (Windows/Linux/macOS)
+
 ```bash
 mkdir build
 cd build
 cmake ..
 cmake --build .
 ```
+
+### Android
+
+Для сборки Android APK см. [android/BUILD.md](android/BUILD.md)
+
+**Требования для Android:**
+- Qt 5.15+ с поддержкой Android
+- Android SDK и NDK
+- Java JDK 8+
+
+**Быстрая сборка через Qt Creator:**
+1. Откройте проект в Qt Creator
+2. Выберите Android Kit
+3. Нажмите Build → Build Android APK
 
 ## Использование
 

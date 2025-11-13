@@ -12,11 +12,11 @@ Item {
     property alias font: label.font
     signal clicked()
 
-    // Fixed width to prevent button resizing when text changes
-    // Reduced width to fit 4 buttons in segment row
-    property int fixedWidth: 140
-    implicitWidth: fixedWidth
-    implicitHeight: 60  // Increased height for two-line text
+           // Fixed width to prevent button resizing when text changes
+           // Reduced width to fit 4 buttons in segment row
+           property int fixedWidth: Qt.platform.os === "android" ? 120 : 140
+           implicitWidth: fixedWidth
+           implicitHeight: Qt.platform.os === "android" ? 50 : 60  // Increased height for two-line text
 
     Rectangle {
         id: background

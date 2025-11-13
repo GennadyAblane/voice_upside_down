@@ -9,6 +9,14 @@ if (NOT DEFINED CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose the type of build." FORCE)
 endif()
 
+# Android configuration
+if (ANDROID)
+    set(ANDROID_PACKAGE_NAME "com.voiceupsidedown.master")
+    set(ANDROID_APP_ICON "@mipmap/ic_launcher")
+    set(ANDROID_MIN_SDK_VERSION 21)
+    set(ANDROID_TARGET_SDK_VERSION 33)
+endif()
+
 set(QT_MIN_VERSION "5.15.0")
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
@@ -26,6 +34,11 @@ find_package(Qt5 ${QT_MIN_VERSION} COMPONENTS
 find_package(Qt5 ${QT_MIN_VERSION} COMPONENTS QuickWidgets QUIET)
 if(Qt5QuickWidgets_FOUND)
     # QtGraphicalEffects is available through QuickWidgets
+endif()
+
+# Android extras for deployment
+if (ANDROID)
+    find_package(Qt5 ${QT_MIN_VERSION} COMPONENTS AndroidExtras QUIET)
 endif()
 
 add_subdirectory(src)

@@ -35,7 +35,18 @@ QString ensureDirectory(const QString &path)
 
 QString applicationDataRoot()
 {
+#ifdef Q_OS_ANDROID
+    // On Android, use app-specific data directory
+    QString base = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (base.isEmpty()) {
+        base = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+    }
+    if (base.isEmpty()) {
+        base = QCoreApplication::applicationDirPath();
+    }
+#else
     const QString base = QCoreApplication::applicationDirPath();
+#endif
     return ensureDirectory(base);
 }
 

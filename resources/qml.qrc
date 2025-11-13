@@ -1,6 +1,7 @@
 <RCC>
     <qresource prefix="/">
         <file alias="main.qml">../qml/main.qml</file>
+        <file alias="main_android.qml">../qml/main_android.qml</file>
         <file alias="components/SegmentRow.qml">../qml/components/SegmentRow.qml</file>
         <file alias="components/PrimaryButton.qml">../qml/components/PrimaryButton.qml</file>
         <file alias="components/StatusBadge.qml">../qml/components/StatusBadge.qml</file>

@@ -21,7 +21,7 @@ Item {
     signal recordingPlayTriggered()
     signal reversePlayTriggered()
 
-    implicitHeight: 120  // Increased to accommodate taller buttons
+    implicitHeight: Qt.platform.os === "android" ? 100 : 120  // Increased to accommodate taller buttons
     implicitWidth: parent ? parent.width : 800
 
     Rectangle {
@@ -84,40 +84,40 @@ Item {
             Layout.fillWidth: true
             spacing: Theme.Theme.smallSpacing
 
-            PrimaryButton {
-                Layout.preferredWidth: 140
-                Layout.fillWidth: false
-                text: recordingActive ? qsTr("Стоп") : qsTr("Записать")
-                enabled: root.enabled
-                onClicked: root.recordTriggered()
-            }
+                   PrimaryButton {
+                       Layout.preferredWidth: Qt.platform.os === "android" ? 120 : 140
+                       Layout.fillWidth: false
+                       text: recordingActive ? qsTr("Стоп") : qsTr("Записать")
+                       enabled: root.enabled
+                       onClicked: root.recordTriggered()
+                   }
 
-            PrimaryButton {
-                Layout.preferredWidth: 140
-                Layout.fillWidth: false
-                text: recordingPlaying ? qsTr("Стоп") : qsTr("Воспроизвести\nзапись")
-                secondary: true
-                enabled: root.enabled && recorded
-                onClicked: root.recordingPlayTriggered()
-            }
+                   PrimaryButton {
+                       Layout.preferredWidth: Qt.platform.os === "android" ? 120 : 140
+                       Layout.fillWidth: false
+                       text: recordingPlaying ? qsTr("Стоп") : qsTr("Воспроизвести\nзапись")
+                       secondary: true
+                       enabled: root.enabled && recorded
+                       onClicked: root.recordingPlayTriggered()
+                   }
 
-            PrimaryButton {
-                Layout.preferredWidth: 140
-                Layout.fillWidth: false
-                text: originalPlaying ? qsTr("Стоп") : qsTr("Воспроизвести\nоригинал")
-                secondary: true
-                enabled: root.enabled
-                onClicked: root.originalPlayTriggered()
-            }
+                   PrimaryButton {
+                       Layout.preferredWidth: Qt.platform.os === "android" ? 120 : 140
+                       Layout.fillWidth: false
+                       text: originalPlaying ? qsTr("Стоп") : qsTr("Воспроизвести\nоригинал")
+                       secondary: true
+                       enabled: root.enabled
+                       onClicked: root.originalPlayTriggered()
+                   }
 
-            PrimaryButton {
-                Layout.preferredWidth: 140
-                Layout.fillWidth: false
-                text: reversePlaying ? qsTr("Стоп") : qsTr("Реверс\nоригинал")
-                secondary: true
-                enabled: root.enabled
-                onClicked: root.reversePlayTriggered()
-            }
+                   PrimaryButton {
+                       Layout.preferredWidth: Qt.platform.os === "android" ? 120 : 140
+                       Layout.fillWidth: false
+                       text: reversePlaying ? qsTr("Стоп") : qsTr("Реверс\nоригинал")
+                       secondary: true
+                       enabled: root.enabled
+                       onClicked: root.reversePlayTriggered()
+                   }
         }
     }
 }
