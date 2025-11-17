@@ -21,9 +21,9 @@ Item {
     Rectangle {
         id: background
         anchors.fill: parent
-        color: secondary ? Theme.Theme.colors.backgroundStart : Theme.Theme.colors.accentShiny
+        color: enabled ? "#FFFFFF" : "#808080"  // белый для активных, серый для неактивных
         radius: Theme.Theme.cornerRadius
-        opacity: enabled ? 1.0 : 0.5
+        opacity: 1.0
         layer.enabled: true
         layer.effect: DropShadow {
             color: Theme.Theme.colors.shadowColor
@@ -38,8 +38,14 @@ Item {
             anchors.fill: parent
             hoverEnabled: true
             enabled: root.enabled
-            onEntered: background.color = Theme.Theme.colors.accentWarm
-            onExited: background.color = secondary ? Theme.Theme.colors.backgroundStart : Theme.Theme.colors.accentShiny
+            onEntered: {
+                if (root.enabled) {
+                    background.color = Theme.Theme.colors.accentWarm
+                }
+            }
+            onExited: {
+                background.color = root.enabled ? "#FFFFFF" : "#808080"
+            }
             onClicked: root.clicked()
             cursorShape: Qt.PointingHandCursor
         }

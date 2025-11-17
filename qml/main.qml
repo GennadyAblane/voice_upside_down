@@ -430,16 +430,132 @@ ApplicationWindow {
     FileDialog {
         id: saveProjectDialog
         title: qsTr("Сохранить проект")
+        nameFilters: ["Voice Upside Down Project (*.vups)", "All files (*)"]
         selectExisting: false
-        selectFolder: true
-        onAccepted: controller ? controller.saveProjectTo(fileUrl.toLocalFile()) : null
+        defaultSuffix: "vups"
+        onAccepted: {
+            if (controller) {
+                var filePath = "";
+                
+                // Convert URL to local file path (Windows example)
+                if (fileUrl) {
+                    if (typeof fileUrl.toLocalFile === "function") {
+                        filePath = fileUrl.toLocalFile();
+                    } else if (typeof fileUrl === "string") {
+                        // Fallback: handle string manually
+                        filePath = fileUrl;
+                        if (filePath.indexOf("file://") === 0) {
+                            filePath = filePath.substring(7); // Remove "file://"
+                            while (filePath.length > 0 && filePath.charAt(0) === '/') {
+                                filePath = filePath.substring(1);
+                            }
+                        }
+                        try {
+                            filePath = decodeURIComponent(filePath);
+                        } catch (e) {
+                            // If decode fails, use as-is
+                        }
+                    } else {
+                        // Try toString() as last resort
+                        try {
+                            var urlString = String(fileUrl);
+                            filePath = urlString;
+                            if (filePath.indexOf("file://") === 0) {
+                                filePath = filePath.substring(7);
+                                while (filePath.length > 0 && filePath.charAt(0) === '/') {
+                                    filePath = filePath.substring(1);
+                                }
+                            }
+                            try {
+                                filePath = decodeURIComponent(filePath);
+                            } catch (e) {
+                                // If decode fails, use as-is
+                            }
+                        } catch (e) {
+                            console.error("Failed to convert fileUrl to string:", e);
+                        }
+                    }
+                }
+                
+                // Ensure we have a valid string path
+                if (!filePath || typeof filePath !== "string" || filePath.length === 0) {
+                    console.error("Invalid file path:", filePath, "fileUrl type:", typeof fileUrl, "fileUrl:", fileUrl);
+                    return;
+                }
+                
+                // Extract project name from file path (without extension)
+                var fileName = filePath;
+                // Handle both forward and backslashes
+                var lastSlash = Math.max(fileName.lastIndexOf('/'), fileName.lastIndexOf('\\'));
+                if (lastSlash !== -1) {
+                    fileName = fileName.substring(lastSlash + 1);
+                }
+                
+                // Remove .vups extension if present
+                var projectName = fileName;
+                if (projectName.toLowerCase().endsWith('.vups')) {
+                    projectName = projectName.substring(0, projectName.length - 5);
+                }
+                
+                controller.setProjectName(projectName);
+                controller.saveProjectTo(filePath);
+            }
+        }
     }
 
     FileDialog {
         id: openProjectDialog
         title: qsTr("Открыть проект")
         nameFilters: ["Voice Upside Down Project (*.vups)", "All files (*)"]
-        onAccepted: controller ? controller.openProjectFrom(fileUrl.toLocalFile()) : null
+        onAccepted: {
+            if (controller) {
+                var filePath = "";
+                
+                // Convert URL to local file path (same approach as saveProjectDialog)
+                if (fileUrl && typeof fileUrl.toLocalFile === "function") {
+                    filePath = fileUrl.toLocalFile();
+                } else if (typeof fileUrl === "string") {
+                    // Fallback: handle string manually
+                    filePath = fileUrl;
+                    if (filePath.indexOf("file://") === 0) {
+                        filePath = filePath.substring(7); // Remove "file://"
+                        while (filePath.length > 0 && filePath.charAt(0) === '/') {
+                            filePath = filePath.substring(1);
+                        }
+                    }
+                    try {
+                        filePath = decodeURIComponent(filePath);
+                    } catch (e) {
+                        // If decode fails, use as-is
+                    }
+                } else {
+                    // Try toString() as last resort
+                    try {
+                        var urlString = String(fileUrl);
+                        filePath = urlString;
+                        if (filePath.indexOf("file://") === 0) {
+                            filePath = filePath.substring(7);
+                            while (filePath.length > 0 && filePath.charAt(0) === '/') {
+                                filePath = filePath.substring(1);
+                            }
+                        }
+                        try {
+                            filePath = decodeURIComponent(filePath);
+                        } catch (e) {
+                            // If decode fails, use as-is
+                        }
+                    } catch (e) {
+                        console.error("Failed to convert fileUrl to string:", e);
+                    }
+                }
+                
+                if (filePath && filePath.length > 0) {
+                    controller.openProjectFrom(filePath);
+                } else {
+                    console.error("Invalid file path for opening project");
+                }
+            }
+        }
     }
 }
 

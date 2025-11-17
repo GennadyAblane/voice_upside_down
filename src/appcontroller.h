@@ -56,6 +56,7 @@ public:
     Q_INVOKABLE void stopSourceRecording();
     Q_INVOKABLE void saveProjectTo(const QString &directoryPath);
     Q_INVOKABLE void openProjectFrom(const QString &projectFilePath);
+    Q_INVOKABLE void setProjectName(const QString &name);
     Q_INVOKABLE void changeSegmentLength(int seconds);
 
     Q_INVOKABLE bool isSegmentRecording(int segmentIndex) const;

@@ -14,6 +14,7 @@
 #include <QFileInfo>
 #include <QFile>
 #include <QDir>
+#include <QUrl>
 
 AppController::AppController(QObject *parent)
     : QObject(parent)
@@ -135,6 +136,18 @@ void AppController::loadAudioSource(const QString &filePath)
         return;
     }
 
+    // Delete old reverse files before loading new source
+    const QString cutsDir = PathUtils::defaultCutsRoot();
+    if (QDir(cutsDir).exists()) {
+        QDir dir(cutsDir);
+        const QStringList filters = QStringList() << "segment_*_reverse.wav";
+        const QFileInfoList files = dir.entryInfoList(filters, QDir::Files);
+        for (const QFileInfo &fileInfo : files) {
+            QFile::remove(fileInfo.absoluteFilePath());
+            LOG_INFO() << "Removed old reverse file:" << fileInfo.absoluteFilePath();
+        }
+    }
+
     m_project.originalBuffer() = buffer;
     m_project.setOriginalFilePath(filePath);
     ensureProjectNameFromSource(filePath);
@@ -208,16 +221,105 @@ void AppController::stopSourceRecording()
     }
 }
 
-void AppController::saveProjectTo(const QString &directoryPath)
+void AppController::setProjectName(const QString &name)
+{
+    if (name.isEmpty())
+        return;
+    
+    m_project.setProjectName(PathUtils::cleanName(name));
+    LOG_INFO() << "Project name set to:" << m_project.projectName();
+}
+
+void AppController::saveProjectTo(const QString &filePath)
 {
     if (!m_projectReady)
         return;
 
-    LOG_INFO() << "Saving project to" << directoryPath;
+    // filePath is the full path to .vups file (e.g., "C:/Projects/MyProject.vups")
+    // Extract directory and project name
+    QFileInfo fileInfo(filePath);
+    QString directoryPath = fileInfo.absolutePath();
+    QString projectName = fileInfo.completeBaseName(); // name without extension
+    
+    // Create project directory (same name as file, without extension)
+    QString projectDir = directoryPath + QDir::separator() + projectName;
+    PathUtils::ensureDirectory(projectDir);
+
+    LOG_INFO() << "Saving project to" << projectDir << "from file path" << filePath;
     QString info;
-    if (m_serializer->save(directoryPath, m_project, &info)) {
-        setStatusMessage(tr("Проект сохранен: %1").arg(directoryPath));
-    LOG_INFO() << "Project saved successfully";
+    if (m_serializer->save(projectDir, m_project, &info)) {
+        // If recording was from microphone (source_recording.wav), save it as _song.wav
+        // Check if original file is from microphone recording
+        const QString originalPath = m_project.originalFilePath();
+        bool isMicrophoneRecording = false;
+        if (!originalPath.isEmpty()) {
+            QFileInfo originalInfo(originalPath);
+            isMicrophoneRecording = originalInfo.fileName() == QStringLiteral("source_recording.wav");
+        }
+        
+        if (isMicrophoneRecording && QFileInfo::exists(originalPath)) {
+            // Save original microphone recording as _song.wav
+            const QString songFileName = projectName + QStringLiteral("_song.wav");
+            const QString songPath = projectDir + QDir::separator() + songFileName;
+            if (QFile::copy(originalPath, songPath)) {
+                LOG_INFO() << "Copied microphone recording to" << songPath;
+            } else {
+                LOG_WARN() << "Failed to copy microphone recording from" << originalPath << "to" << songPath;
+            }
+        } else {
+            // If there's a glued song (decoded file), save it as _fragment_song.wav
+            const QString decodedPath = m_project.decodedFilePath();
+            if (!decodedPath.isEmpty() && QFileInfo::exists(decodedPath)) {
+                const QString fragmentSongFileName = projectName + QStringLiteral("_fragment_song.wav");
+                const QString fragmentSongPath = projectDir + QDir::separator() + fragmentSongFileName;
+                if (QFile::copy(decodedPath, fragmentSongPath)) {
+                    LOG_INFO() << "Copied glued song to" << fragmentSongPath;
+                } else {
+                    LOG_WARN() << "Failed to copy glued song from" << decodedPath << "to" << fragmentSongPath;
+                }
+            }
+            
+            // If there's a reversed glued song, save it as _revers_fragment_song.wav
+            if (!m_reversedSongPath.isEmpty() && QFileInfo::exists(m_reversedSongPath)) {
+                const QString reversFragmentSongFileName = projectName + QStringLiteral("_revers_fragment_song.wav");
+                const QString reversFragmentSongPath = projectDir + QDir::separator() + reversFragmentSongFileName;
+                if (QFile::copy(m_reversedSongPath, reversFragmentSongPath)) {
+                    LOG_INFO() << "Copied reversed glued song to" << reversFragmentSongPath;
+                } else {
+                    LOG_WARN() << "Failed to copy reversed glued song from" << m_reversedSongPath << "to" << reversFragmentSongPath;
+                }
+            }
+        }
+        
+        // Create .vups file that points to project.json in the project directory
+        // This allows users to double-click .vups file to open the project
+        const QString vupsFilePath = filePath; // Full path to .vups file
+        const QString projectJsonPath = projectDir + QDir::separator() + QStringLiteral("project.json");
+        
+        // Copy project.json to .vups file (or create a link file)
+        // For simplicity, we'll copy the project.json content to .vups
+        if (QFileInfo::exists(projectJsonPath)) {
+            if (QFile::copy(projectJsonPath, vupsFilePath)) {
+                LOG_INFO() << "Created .vups file at" << vupsFilePath;
+            } else {
+                // If copy fails (e.g., file already exists), try to overwrite
+                if (QFileInfo::exists(vupsFilePath)) {
+                    QFile::remove(vupsFilePath);
+                    if (QFile::copy(projectJsonPath, vupsFilePath)) {
+                        LOG_INFO() << "Created .vups file at" << vupsFilePath;
+                    } else {
+                        LOG_WARN() << "Failed to create .vups file at" << vupsFilePath;
+                    }
+                } else {
+                    LOG_WARN() << "Failed to create .vups file at" << vupsFilePath;
+                }
+            }
+        } else {
+            LOG_WARN() << "project.json not found, cannot create .vups file";
+        }
+        
+        setStatusMessage(tr("Проект сохранен: %1").arg(filePath));
+        LOG_INFO() << "Project saved successfully";
     } else {
         setStatusMessage(info);
         LOG_WARN() << "Failed to save project:" << info;
@@ -227,8 +329,46 @@ void AppController::saveProjectTo(const QString &directoryPath)
 void AppController::openProjectFrom(const QString &projectFilePath)
 {
     LOG_INFO() << "Opening project from" << projectFilePath;
+    
+    // Convert URL to local file path if needed
+    QString localPath = projectFilePath;
+    if (localPath.startsWith(QStringLiteral("file://"))) {
+        QUrl url(localPath);
+        if (url.isLocalFile()) {
+            localPath = url.toLocalFile();
+        } else {
+            // Fallback: remove file:// prefix manually
+            localPath = localPath.mid(7); // Remove "file://"
+            // Remove leading slashes
+            while (localPath.startsWith(QStringLiteral("/"))) {
+                localPath = localPath.mid(1);
+            }
+        }
+        LOG_INFO() << "Converted URL to local path:" << localPath;
+    }
+    
+    // If .vups file is provided, find project.json in the project directory
+    QString actualProjectPath = localPath;
+    QFileInfo fileInfo(localPath);
+    if (fileInfo.suffix().toLower() == QStringLiteral("vups")) {
+        // .vups file points to project directory
+        QString projectName = fileInfo.completeBaseName();
+        QString projectDir = fileInfo.absolutePath() + QDir::separator() + projectName;
+        QString projectJsonPath = projectDir + QDir::separator() + QStringLiteral("project.json");
+        
+        if (QFileInfo::exists(projectJsonPath)) {
+            actualProjectPath = projectJsonPath;
+            LOG_INFO() << "Found project.json at" << actualProjectPath;
+        } else {
+            // If project.json not found in directory, try to use .vups file directly
+            // (in case it contains the project data)
+            actualProjectPath = projectFilePath;
+            LOG_INFO() << "Using .vups file directly as project file";
+        }
+    }
+    
     QString info;
-    if (!m_serializer->load(projectFilePath, m_project, &info)) {
+    if (!m_serializer->load(actualProjectPath, m_project, &info)) {
         setStatusMessage(info);
         LOG_WARN() << "Failed to open project:" << info;
         return;
@@ -271,6 +411,20 @@ void AppController::changeSegmentLength(int seconds)
 
     LOG_INFO() << "Changing segment length to" << seconds;
     bool hadRecordings = hasAnySegmentRecorded();
+    
+    // Delete all existing reverse files before changing segment length
+    // because segments will be recreated with new frame counts
+    const QString cutsDir = PathUtils::defaultCutsRoot();
+    if (QDir(cutsDir).exists()) {
+        const QStringList filters = QStringList() << "segment_*_reverse.wav";
+        const QFileInfoList files = QDir(cutsDir).entryInfoList(filters, QDir::Files);
+        for (const QFileInfo &fileInfo : files) {
+            if (QFile::remove(fileInfo.absoluteFilePath())) {
+                LOG_INFO() << "Removed old reverse file due to segment length change:" << fileInfo.absoluteFilePath();
+            }
+        }
+    }
+    
     m_project.setSegmentLengthSeconds(seconds);
     emit segmentLengthChanged();
     emit segmentHintTextChanged();
@@ -524,12 +678,12 @@ void AppController::toggleSegmentReversePlayback(int segmentIndex)
 
     if (!QFileInfo::exists(segment->reversePath)) {
         LOG_INFO() << "Creating reverse file for segment" << segmentIndex;
-        // Always create reverse from original segment (not from recording)
         QByteArray pcm;
         QAudioFormat format;
         QString error;
 
-        // Extract from original buffer
+        // Always create reverse from original buffer (button is "Реверс оригинал")
+        LOG_INFO() << "Creating reverse from original segment" << segmentIndex;
         const QByteArray segmentData = m_project.originalBuffer().sliceFrames(segment->startFrame, segment->frameCount);
         if (segmentData.isEmpty()) {
             setStatusMessage(tr("Ошибка: сегмент %1 пуст").arg(segmentIndex));
@@ -540,8 +694,8 @@ void AppController::toggleSegmentReversePlayback(int segmentIndex)
         format = m_project.originalBuffer().format();
         pcm = segmentData;
         
-        LOG_INFO() << "Extracted original segment" << segmentIndex << "size" << pcm.size() 
-                   << "format:" << format.channelCount() << "ch" << format.sampleRate() << "Hz"
+        LOG_INFO() << "Extracted segment" << segmentIndex << "from original" 
+                   << "size" << pcm.size() << "format:" << format.channelCount() << "ch" << format.sampleRate() << "Hz"
                    << format.sampleSize() << "bit" << (format.sampleType() == QAudioFormat::SignedInt ? "signed" : "float");
         
         if (!format.isValid()) {
@@ -632,10 +786,15 @@ void AppController::glueSegments()
     }
 
     // Read all recorded segments
+    // Segments are stored in reverse order (from end to start of song):
+    // segment 1 = end of song, segment 2, segment 3, segment 4 = start of song
+    // We glue them in display order (1 → 2 → 3 → 4) so that after reversing
+    // the glued song, we get correct order (4 → 3 → 2 → 1 = start to end)
     QByteArray gluedPcm;
     QAudioFormat format;
     bool formatSet = false;
 
+    // Iterate in display order (as shown in the list)
     for (const auto &segment : segments) {
         if (segment.recordingPath.isEmpty() || !QFileInfo::exists(segment.recordingPath)) {
             setStatusMessage(tr("Файл записи сегмента %1 не найден").arg(segment.displayIndex));
@@ -667,6 +826,7 @@ void AppController::glueSegments()
         }
 
         gluedPcm.append(pcm);
+        LOG_INFO() << "Added segment" << segment.displayIndex << "to glued song, size" << pcm.size();
     }
 
     // Save glued song
