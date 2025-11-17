@@ -90,3 +90,8 @@ cut/
 *.wav
 *.mp3
 
+# Scripts and temporary files
+*.bat
+*.py
+*.user
+
