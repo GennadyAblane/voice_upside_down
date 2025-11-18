@@ -29,6 +29,8 @@ class AppController : public QObject
     Q_PROPERTY(bool canReverseSong READ canReverseSong NOTIFY reverseStateChanged)
     Q_PROPERTY(bool canPlayReverse READ canPlayReverse NOTIFY reverseStateChanged)
     Q_PROPERTY(bool reversePlaybackActive READ reversePlaybackActive NOTIFY reverseStateChanged)
+    Q_PROPERTY(bool recordingDialogVisible READ recordingDialogVisible NOTIFY recordingDialogVisibleChanged)
+    Q_PROPERTY(bool recordingReady READ recordingReady NOTIFY recordingReadyChanged)
 
 public:
     explicit AppController(QObject *parent = nullptr);
@@ -50,6 +52,8 @@ public:
     bool canReverseSong() const;
     bool canPlayReverse() const;
     bool reversePlaybackActive() const;
+    bool recordingDialogVisible() const;
+    bool recordingReady() const;
 
     Q_INVOKABLE void loadAudioSource(const QString &filePath);
     Q_INVOKABLE void startSourceRecording();
@@ -75,6 +79,7 @@ public:
     Q_INVOKABLE void toggleSongReversePlayback();
 
     Q_INVOKABLE void saveProject();
+    Q_INVOKABLE void stopCurrentRecording();
 
 signals:
     void segmentLengthChanged();
@@ -87,6 +92,8 @@ signals:
     void interactionsStateChanged();
     void glueStateChanged();
     void reverseStateChanged();
+    void recordingDialogVisibleChanged();
+    void recordingReadyChanged();
 
 private:
     void setStatusMessage(const QString &message);
@@ -113,6 +120,8 @@ private:
     bool m_projectReady = false;
     bool m_gluePlaybackActive = false;
     bool m_reversePlaybackActive = false;
+    bool m_recordingDialogVisible = false;
+    bool m_recordingReady = false;
 
     QSet<int> m_activeSegmentRecordings;
     QSet<int> m_activeOriginalPlayback;

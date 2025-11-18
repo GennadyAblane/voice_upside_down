@@ -27,6 +27,16 @@ AppController::AppController(QObject *parent)
     m_segmentModel.setProject(&m_project);
     setStatusMessage(tr("Готово"));
 
+    // Pre-initialize audio input device to reduce delay when starting recording
+    QAudioFormat format;
+    format.setChannelCount(1);
+    format.setSampleRate(44100);
+    format.setSampleSize(16);
+    format.setSampleType(QAudioFormat::SignedInt);
+    format.setCodec(QStringLiteral("audio/pcm"));
+    format.setByteOrder(QAudioFormat::LittleEndian);
+    m_recorder->prepare(format);
+
     // Connect playback finished signals to update UI states
     connect(m_playback, &AudioPlaybackEngine::playbackFinished, this, [this]() {
         clearPlaybackStates();
@@ -37,6 +47,38 @@ AppController::AppController(QObject *parent)
         setStatusMessage(error);
         LOG_WARN() << "Playback error:" << error;
         // Note: QMessageBox cannot be used in QML application (QGuiApplication), only logging
+    });
+
+    // Connect recording engine signals
+    connect(m_recorder, &RecordingEngine::recordingReady, this, [this]() {
+        LOG_INFO() << "Recording ready signal received in AppController, sourceRecordingActive:" << m_sourceRecordingActive 
+                   << "activeSegmentRecordings:" << m_activeSegmentRecordings.size();
+        m_recordingReady = true;
+        emit recordingReadyChanged();
+        LOG_INFO() << "recordingReady property set to true, signal emitted, dialogVisible:" << m_recordingDialogVisible;
+    });
+    connect(m_recorder, &RecordingEngine::recordingStopped, this, [this]() {
+        // Handle source recording completion
+        // Check m_sourceRecordingActive BEFORE resetting it
+        bool wasSourceRecording = m_sourceRecordingActive;
+        if (wasSourceRecording) {
+            // Reset flag now that we're handling the completion
+            m_sourceRecordingActive = false;
+            emit sourceRecordingChanged();
+            
+            // Load the recorded file
+            const QString filePath = PathUtils::defaultTempRoot() + QDir::separator() + QStringLiteral("source_recording.wav");
+            if (QFileInfo::exists(filePath)) {
+                loadAudioSource(filePath);
+                setStatusMessage(tr("Запись завершена и загружена"));
+                LOG_INFO() << "Source recording stopped and loaded";
+            } else {
+                setStatusMessage(tr("Запись остановлена"));
+                LOG_WARN() << "Source recording stopped but file not found:" << filePath;
+            }
+        }
+        // Note: Dialog is already hidden in stopSourceRecording() and toggleSegmentRecording()
+        // Note: Segment recording completion is handled in toggleSegmentRecording
     });
 }
 
@@ -119,6 +161,16 @@ bool AppController::reversePlaybackActive() const
     return m_reversePlaybackActive;
 }
 
+bool AppController::recordingDialogVisible() const
+{
+    return m_recordingDialogVisible;
+}
+
+bool AppController::recordingReady() const
+{
+    return m_recordingReady;
+}
+
 void AppController::loadAudioSource(const QString &filePath)
 {
     if (filePath.isEmpty()) {
@@ -170,7 +222,8 @@ void AppController::loadAudioSource(const QString &filePath)
 void AppController::startSourceRecording()
 {
     if (m_sourceRecordingActive) {
-        LOG_WARN() << "startSourceRecording requested, but recording already active";
+        // If already recording, stop it (same as clicking stop button)
+        stopSourceRecording();
         return;
     }
 
@@ -186,7 +239,18 @@ void AppController::startSourceRecording()
     format.setCodec(QStringLiteral("audio/pcm"));
     format.setByteOrder(QAudioFormat::LittleEndian);
 
+    // Show dialog and reset ready state BEFORE starting recording
+    // This ensures dialog is visible when recording starts
+    m_recordingDialogVisible = true;
+    m_recordingReady = false;
+    emit recordingDialogVisibleChanged();
+    emit recordingReadyChanged();
+    LOG_INFO() << "Dialog shown, recordingReady set to false";
+
     if (!m_recorder->startRecording(filePath, format)) {
+        // Hide dialog if recording failed
+        m_recordingDialogVisible = false;
+        emit recordingDialogVisibleChanged();
         setStatusMessage(tr("Ошибка начала записи"));
         LOG_WARN() << "Failed to start source recording";
         return;
@@ -194,8 +258,8 @@ void AppController::startSourceRecording()
 
     m_sourceRecordingActive = true;
     emit sourceRecordingChanged();
-    setStatusMessage(tr("Запись источника..."));
-    LOG_INFO() << "Source recording started to" << filePath;
+    setStatusMessage(tr("Инициализация записи..."));
+    LOG_INFO() << "Source recording initialization started to" << filePath << "recordingReady:" << m_recordingReady;
 }
 
 void AppController::stopSourceRecording()
@@ -205,20 +269,19 @@ void AppController::stopSourceRecording()
         return;
     }
 
-    m_recorder->stop();
-    m_sourceRecordingActive = false;
-    emit sourceRecordingChanged();
+    // Hide dialog immediately
+    m_recordingDialogVisible = false;
+    m_recordingReady = false;
+    emit recordingDialogVisibleChanged();
+    emit recordingReadyChanged();
 
-    // Load the recorded file
-    const QString filePath = PathUtils::defaultTempRoot() + QDir::separator() + QStringLiteral("source_recording.wav");
-    if (QFileInfo::exists(filePath)) {
-        loadAudioSource(filePath);
-        setStatusMessage(tr("Запись завершена и загружена"));
-        LOG_INFO() << "Source recording stopped and loaded";
-    } else {
-        setStatusMessage(tr("Запись остановлена"));
-        LOG_WARN() << "Source recording stopped but file not found:" << filePath;
-    }
+    // Stop recording (will wait 0.25 seconds to capture tail, then emit recordingStopped)
+    // NOTE: Don't set m_sourceRecordingActive = false here!
+    // We need it to be true when recordingStopped signal arrives
+    m_recorder->stop();
+    emit sourceRecordingChanged();
+    setStatusMessage(tr("Завершение записи..."));
+    LOG_INFO() << "Source recording stop requested";
 }
 
 void AppController::setProjectName(const QString &name)
@@ -469,27 +532,55 @@ bool AppController::isSegmentReversePlaying(int segmentIndex) const
 void AppController::toggleSegmentRecording(int segmentIndex)
 {
     if (m_activeSegmentRecordings.contains(segmentIndex)) {
-        // Stop recording
+        // Hide dialog immediately
+        m_recordingDialogVisible = false;
+        m_recordingReady = false;
+        emit recordingDialogVisibleChanged();
+        emit recordingReadyChanged();
+
+        // Stop recording (will wait 0.25 seconds to capture tail, then emit recordingStopped)
+        // Don't remove from active set yet - stopCurrentRecording needs it
         m_recorder->stop();
-        m_activeSegmentRecordings.remove(segmentIndex);
+        setStatusMessage(tr("Завершение записи сегмента %1...").arg(segmentIndex));
         
-        auto *segment = segmentByDisplayIndex(segmentIndex);
-        if (segment && QFileInfo::exists(segment->recordingPath)) {
-            segment->hasRecording = true;
-            emit m_project.segmentsUpdated();
-            setStatusMessage(tr("Запись сегмента %1 завершена").arg(segmentIndex));
-            LOG_INFO() << "Segment recording stopped for index" << segmentIndex << "saved to" << segment->recordingPath;
-        } else {
-            setStatusMessage(tr("Ошибка сохранения записи сегмента %1").arg(segmentIndex));
-            LOG_WARN() << "Segment recording file not found:" << (segment ? segment->recordingPath : QString());
-        }
-        emit glueStateChanged();
+        // Connect to recordingStopped to finalize segment recording
+        // We need to track which segment is being finalized
+        // Use a lambda that captures segmentIndex and disconnects itself
+        QMetaObject::Connection *connection = new QMetaObject::Connection();
+        *connection = connect(m_recorder, &RecordingEngine::recordingStopped, this, [this, segmentIndex, connection]() {
+            // Disconnect immediately to ensure this is only called once
+            disconnect(*connection);
+            delete connection;
+            
+            // Now remove from active set
+            m_activeSegmentRecordings.remove(segmentIndex);
+            
+            auto *segment = segmentByDisplayIndex(segmentIndex);
+            if (segment && QFileInfo::exists(segment->recordingPath)) {
+                segment->hasRecording = true;
+                emit m_project.segmentsUpdated();
+                setStatusMessage(tr("Запись сегмента %1 завершена").arg(segmentIndex));
+                LOG_INFO() << "Segment recording stopped for index" << segmentIndex << "saved to" << segment->recordingPath;
+            } else {
+                setStatusMessage(tr("Ошибка сохранения записи сегмента %1").arg(segmentIndex));
+                LOG_WARN() << "Segment recording file not found:" << (segment ? segment->recordingPath : QString());
+            }
+            
+            emit glueStateChanged();
+        });
+        
         return;
     }
 
     // Stop all other playback/recording
     m_playback->stopAll();
-    m_recorder->stop();
+    // Stop recorder if it's recording
+    // Note: stop() will wait 0.25s for tail capture, but we need to start new recording
+    // So we just call stop() and let it handle cleanup in background
+    if (m_recorder->isRecording()) {
+        m_recorder->stop();
+        LOG_INFO() << "Stopped previous recording before starting segment recording";
+    }
     m_activeOriginalPlayback.clear();
     m_activeRecordedPlayback.clear();
     m_activeReversePlayback.clear();
@@ -534,15 +625,25 @@ void AppController::toggleSegmentRecording(int segmentIndex)
         format.setByteOrder(QAudioFormat::LittleEndian);
     }
 
+    // Show dialog BEFORE starting recording (same as source recording)
+    m_recordingDialogVisible = true;
+    m_recordingReady = false;
+    emit recordingDialogVisibleChanged();
+    emit recordingReadyChanged();
+    LOG_INFO() << "Dialog shown for segment recording, recordingReady set to false";
+
     if (!m_recorder->startRecording(segment->recordingPath, format)) {
+        // Hide dialog if recording failed
+        m_recordingDialogVisible = false;
+        emit recordingDialogVisibleChanged();
         setStatusMessage(tr("Ошибка начала записи сегмента %1").arg(segmentIndex));
         LOG_WARN() << "Failed to start recording for segment" << segmentIndex;
         return;
     }
 
     m_activeSegmentRecordings.insert(segmentIndex);
-    setStatusMessage(tr("Запись сегмента %1").arg(segmentIndex));
-    LOG_INFO() << "Segment recording started for index" << segmentIndex << "to" << segment->recordingPath;
+    setStatusMessage(tr("Инициализация записи сегмента %1...").arg(segmentIndex));
+    LOG_INFO() << "Segment recording initialization started for index" << segmentIndex << "to" << segment->recordingPath << "recordingReady:" << m_recordingReady;
 }
 
 void AppController::toggleSegmentOriginalPlayback(int segmentIndex)
@@ -985,6 +1086,23 @@ void AppController::saveProject()
     PathUtils::ensureDirectory(projectDir);
 
     saveProjectTo(projectDir);
+}
+
+void AppController::stopCurrentRecording()
+{
+    // Stop source recording if active
+    if (m_sourceRecordingActive) {
+        stopSourceRecording();
+        return;
+    }
+    
+    // Stop segment recording if active
+    if (!m_activeSegmentRecordings.isEmpty()) {
+        // Get the first (and should be only) active segment recording
+        int segmentIndex = *m_activeSegmentRecordings.begin();
+        toggleSegmentRecording(segmentIndex);
+        return;
+    }
 }
 
 void AppController::setStatusMessage(const QString &message)

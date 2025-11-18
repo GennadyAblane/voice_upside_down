@@ -476,5 +476,258 @@ ApplicationWindow {
             }
         }
     }
+
+    // Snowflakes falling across entire screen when dialog is visible
+    Item {
+        id: screenSnowflakes
+        anchors.fill: parent
+        visible: controller && controller.recordingDialogVisible
+        z: 9999 // Below dialog but above content
+
+        // Snowflake component
+        Component {
+            id: screenSnowflakeStyle
+
+            Rectangle {
+                width: size
+                height: size
+                radius: size / 2
+                color: "white"
+                opacity: 0.7
+
+                layer.enabled: true
+                layer.effect: DropShadow {
+                    color: "#80ffffff"
+                    radius: size * 0.8
+                    samples: 12
+                    horizontalOffset: 0
+                    verticalOffset: 0
+                }
+
+                readonly property real size: 5 // Reduced by 3 times (15 -> 5)
+            }
+        }
+
+        // Animated snowflakes across entire screen - one at a time, randomly distributed
+        Repeater {
+            model: 50 // More snowflakes for better coverage
+            delegate: Loader {
+                id: screenSnowflakeLoader
+                sourceComponent: screenSnowflakeStyle
+                x: ((index * 73 + index * 41 + index * 19) % window.width)
+                y: -5
+                
+                property real horizontalDrift: ((index % 7) - 3) * 1.2
+                property real startX: ((index * 73 + index * 41 + index * 19) % window.width)
+                property real startDelay: (index * 97) % 3000 // Random delay up to 3 seconds
+                
+                SequentialAnimation on y {
+                    running: screenSnowflakes.visible
+                    loops: Animation.Infinite
+                    PauseAnimation { duration: screenSnowflakeLoader.startDelay }
+                    NumberAnimation {
+                        to: window.height + 5
+                        duration: 4000 + (index % 7) * 1000
+                        easing.type: Easing.Linear
+                    }
+                    PropertyAction {
+                        target: screenSnowflakeLoader
+                        property: "x"
+                        value: ((index * 73 + index * 41 + index * 19 + (index % 13) * 23) % window.width)
+                    }
+                    PropertyAction {
+                        target: screenSnowflakeLoader
+                        property: "y"
+                        value: -5
+                    }
+                    PropertyAction {
+                        target: screenSnowflakeLoader
+                        property: "startDelay"
+                        value: (index * 97 + (index % 11) * 31) % 3000
+                    }
+                }
+                
+                SequentialAnimation on x {
+                    running: screenSnowflakes.visible
+                    loops: Animation.Infinite
+                    PauseAnimation { duration: screenSnowflakeLoader.startDelay }
+                    NumberAnimation {
+                        to: screenSnowflakeLoader.startX + screenSnowflakeLoader.horizontalDrift * 40
+                        duration: 4000 + (index % 7) * 1000
+                        easing.type: Easing.InOutSine
+                    }
+                    NumberAnimation {
+                        to: screenSnowflakeLoader.startX - screenSnowflakeLoader.horizontalDrift * 40
+                        duration: 4000 + (index % 7) * 1000
+                        easing.type: Easing.InOutSine
+                    }
+                }
+            }
+        }
+    }
+
+    // Recording dialog - shows when recording starts
+    Item {
+        id: recordingDialog
+        anchors.fill: parent
+        visible: controller && controller.recordingDialogVisible
+        z: 10000 // On top of everything
+
+        // Semi-transparent black overlay
+        Rectangle {
+            anchors.fill: parent
+            color: "#80000000"
+        }
+
+        // Block all mouse interactions with background
+        MouseArea {
+            anchors.fill: parent
+            enabled: recordingDialog.visible
+            // Don't propagate clicks to background
+            onClicked: {
+                // Do nothing - just block clicks
+            }
+        }
+
+        // Handle keyboard events
+        Keys.onPressed: {
+            if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space) {
+                event.accepted = true;
+                if (controller) {
+                    controller.stopCurrentRecording();
+                }
+            }
+        }
+
+        // Make dialog focusable to receive keyboard events
+        focus: visible
+
+        Rectangle {
+            id: dialogContent
+            anchors.centerIn: parent
+            width: 400
+            height: 250
+            radius: 16
+            color: controller && controller.recordingReady ? "#dbffed" : "#ffc2cc"
+            clip: true // Clip snowflakes to dialog bounds
+            
+            // Debug: log color changes
+            onColorChanged: {
+                console.log("Dialog color changed to:", color, "recordingReady:", controller ? controller.recordingReady : "no controller")
+            }
+            
+            Behavior on color {
+                ColorAnimation { duration: 300 }
+            }
+
+            layer.enabled: true
+            layer.effect: DropShadow {
+                color: "#40000000"
+                radius: 20
+                samples: 32
+                verticalOffset: 4
+            }
+
+            // Snowflakes falling on dialog - one at a time, randomly distributed
+            Repeater {
+                model: 20 // Number of snowflakes on dialog
+                delegate: Loader {
+                    id: dialogSnowflakeLoader
+                    sourceComponent: screenSnowflakeStyle
+                    x: ((index * 43 + index * 29 + index * 17) % (dialogContent.width - 5))
+                    y: -5
+                    
+                    property real horizontalDrift: ((index % 7) - 3) * 0.8
+                    property real startX: ((index * 43 + index * 29 + index * 17) % (dialogContent.width - 5))
+                    property real startDelay: (index * 67) % 2000 // Random delay up to 2 seconds
+                    
+                    SequentialAnimation on y {
+                        running: recordingDialog.visible
+                        loops: Animation.Infinite
+                        PauseAnimation { duration: dialogSnowflakeLoader.startDelay }
+                        NumberAnimation {
+                            to: dialogContent.height + 5
+                            duration: 2500 + (index % 6) * 600
+                            easing.type: Easing.Linear
+                        }
+                        PropertyAction {
+                            target: dialogSnowflakeLoader
+                            property: "x"
+                            value: ((index * 43 + index * 29 + index * 17 + (index % 11) * 19) % (dialogContent.width - 5))
+                        }
+                        PropertyAction {
+                            target: dialogSnowflakeLoader
+                            property: "y"
+                            value: -5
+                        }
+                        PropertyAction {
+                            target: dialogSnowflakeLoader
+                            property: "startDelay"
+                            value: (index * 67 + (index % 9) * 23) % 2000
+                        }
+                    }
+                    
+                    SequentialAnimation on x {
+                        running: recordingDialog.visible
+                        loops: Animation.Infinite
+                        PauseAnimation { duration: dialogSnowflakeLoader.startDelay }
+                        NumberAnimation {
+                            to: dialogSnowflakeLoader.startX + dialogSnowflakeLoader.horizontalDrift * 25
+                            duration: 2500 + (index % 6) * 600
+                            easing.type: Easing.InOutSine
+                        }
+                        NumberAnimation {
+                            to: dialogSnowflakeLoader.startX - dialogSnowflakeLoader.horizontalDrift * 25
+                            duration: 2500 + (index % 6) * 600
+                            easing.type: Easing.InOutSine
+                        }
+                    }
+                }
+            }
+
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 24
+                spacing: 20
+
+                Text {
+                    Layout.fillWidth: true
+                    horizontalAlignment: Text.AlignHCenter
+                    text: {
+                        var ready = controller && controller.recordingReady;
+                        console.log("Text binding evaluated, recordingReady:", ready);
+                        return ready ? qsTr("Запись началась") : qsTr("Сейчас начнется запись");
+                    }
+                    font.pixelSize: 20
+                    font.bold: true
+                    color: "#333333"
+                }
+
+                PrimaryButton {
+                    id: stopButton
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 50
+                    text: qsTr("Стоп")
+                    focus: true
+                    onClicked: {
+                        if (controller) {
+                            controller.stopCurrentRecording();
+                        }
+                    }
+                    
+                    // Also handle keyboard events on button level
+                    Keys.onPressed: {
+                        if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space) {
+                            event.accepted = true;
+                            if (controller) {
+                                controller.stopCurrentRecording();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
