@@ -50,18 +50,36 @@ bool ProjectSerializer::save(const QString &directoryPath, const AudioProject &p
     for (const auto &segment : project.segments()) {
         if (segment.hasRecording && !segment.recordingPath.isEmpty() && QFileInfo::exists(segment.recordingPath)) {
             const QString destSegment = dir.absoluteFilePath(QFileInfo(segment.recordingPath).fileName());
-            if (destSegment != segment.recordingPath && !QFile::copy(segment.recordingPath, destSegment)) {
-                LOG_WARN() << "Failed to copy segment file:" << segment.recordingPath << "to" << destSegment;
+            // Always copy if source and destination are different paths
+            if (QFileInfo(segment.recordingPath).absoluteFilePath() != QFileInfo(destSegment).absoluteFilePath()) {
+                // Remove destination if it exists
+                if (QFileInfo::exists(destSegment)) {
+                    QFile::remove(destSegment);
+                }
+                if (!QFile::copy(segment.recordingPath, destSegment)) {
+                    LOG_WARN() << "Failed to copy segment file:" << segment.recordingPath << "to" << destSegment;
+                } else {
+                    LOG_INFO() << "Copied segment file to" << destSegment;
+                }
             } else {
-                LOG_INFO() << "Copied segment file to" << destSegment;
+                LOG_INFO() << "Segment file already in project directory:" << destSegment;
             }
         }
         if (segment.hasReverse && !segment.reversePath.isEmpty() && QFileInfo::exists(segment.reversePath)) {
             const QString destReverse = dir.absoluteFilePath(QFileInfo(segment.reversePath).fileName());
-            if (destReverse != segment.reversePath && !QFile::copy(segment.reversePath, destReverse)) {
-                LOG_WARN() << "Failed to copy reverse file:" << segment.reversePath << "to" << destReverse;
+            // Always copy if source and destination are different paths
+            if (QFileInfo(segment.reversePath).absoluteFilePath() != QFileInfo(destReverse).absoluteFilePath()) {
+                // Remove destination if it exists
+                if (QFileInfo::exists(destReverse)) {
+                    QFile::remove(destReverse);
+                }
+                if (!QFile::copy(segment.reversePath, destReverse)) {
+                    LOG_WARN() << "Failed to copy reverse file:" << segment.reversePath << "to" << destReverse;
+                } else {
+                    LOG_INFO() << "Copied reverse file to" << destReverse;
+                }
             } else {
-                LOG_INFO() << "Copied reverse file to" << destReverse;
+                LOG_INFO() << "Reverse file already in project directory:" << destReverse;
             }
         }
     }

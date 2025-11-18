@@ -235,94 +235,69 @@ void AppController::saveProjectTo(const QString &filePath)
     if (!m_projectReady)
         return;
 
-    // filePath is the full path to .vups file (e.g., "C:/Projects/MyProject.vups")
-    // Extract directory and project name
+    // filePath is the full path to WAV file where we'll save the reversed glued song
+    // Extract directory and file name
     QFileInfo fileInfo(filePath);
     QString directoryPath = fileInfo.absolutePath();
-    QString projectName = fileInfo.completeBaseName(); // name without extension
+    QString fileName = fileInfo.completeBaseName(); // name without extension
+    QString fileExtension = fileInfo.suffix();
     
-    // Create project directory (same name as file, without extension)
-    QString projectDir = directoryPath + QDir::separator() + projectName;
-    PathUtils::ensureDirectory(projectDir);
-
-    LOG_INFO() << "Saving project to" << projectDir << "from file path" << filePath;
-    QString info;
-    if (m_serializer->save(projectDir, m_project, &info)) {
-        // If recording was from microphone (source_recording.wav), save it as _song.wav
-        // Check if original file is from microphone recording
-        const QString originalPath = m_project.originalFilePath();
-        bool isMicrophoneRecording = false;
-        if (!originalPath.isEmpty()) {
-            QFileInfo originalInfo(originalPath);
-            isMicrophoneRecording = originalInfo.fileName() == QStringLiteral("source_recording.wav");
+    LOG_INFO() << "Saving results to" << filePath;
+    
+    // Check if original file is from microphone recording
+    const QString originalPath = m_project.originalFilePath();
+    bool isMicrophoneRecording = false;
+    if (!originalPath.isEmpty()) {
+        QFileInfo originalInfo(originalPath);
+        isMicrophoneRecording = originalInfo.fileName() == QStringLiteral("source_recording.wav");
+    }
+    
+    // Determine the name for reversed file (add "rev" if not present)
+    QString reversedFileName = fileName;
+    if (!reversedFileName.endsWith(QStringLiteral("rev"), Qt::CaseInsensitive)) {
+        reversedFileName = reversedFileName + QStringLiteral("rev");
+    }
+    QString reversedFilePath = directoryPath + QDir::separator() + reversedFileName + QStringLiteral(".") + fileExtension;
+    
+    // If recording was from microphone, save original file
+    if (isMicrophoneRecording && QFileInfo::exists(originalPath)) {
+        // Save original microphone recording with the same name as the reversed file but without "rev"
+        QString originalFileName = reversedFileName;
+        // Remove "rev" suffix if present
+        if (originalFileName.endsWith(QStringLiteral("rev"), Qt::CaseInsensitive)) {
+            originalFileName = originalFileName.left(originalFileName.length() - 3);
+        }
+        QString originalSavePath = directoryPath + QDir::separator() + originalFileName + QStringLiteral(".") + fileExtension;
+        
+        // Remove destination if it exists
+        if (QFileInfo::exists(originalSavePath)) {
+            QFile::remove(originalSavePath);
         }
         
-        if (isMicrophoneRecording && QFileInfo::exists(originalPath)) {
-            // Save original microphone recording as _song.wav
-            const QString songFileName = projectName + QStringLiteral("_song.wav");
-            const QString songPath = projectDir + QDir::separator() + songFileName;
-            if (QFile::copy(originalPath, songPath)) {
-                LOG_INFO() << "Copied microphone recording to" << songPath;
-            } else {
-                LOG_WARN() << "Failed to copy microphone recording from" << originalPath << "to" << songPath;
-            }
+        if (QFile::copy(originalPath, originalSavePath)) {
+            LOG_INFO() << "Copied microphone recording to" << originalSavePath;
         } else {
-            // If there's a glued song (decoded file), save it as _fragment_song.wav
-            const QString decodedPath = m_project.decodedFilePath();
-            if (!decodedPath.isEmpty() && QFileInfo::exists(decodedPath)) {
-                const QString fragmentSongFileName = projectName + QStringLiteral("_fragment_song.wav");
-                const QString fragmentSongPath = projectDir + QDir::separator() + fragmentSongFileName;
-                if (QFile::copy(decodedPath, fragmentSongPath)) {
-                    LOG_INFO() << "Copied glued song to" << fragmentSongPath;
-                } else {
-                    LOG_WARN() << "Failed to copy glued song from" << decodedPath << "to" << fragmentSongPath;
-                }
-            }
-            
-            // If there's a reversed glued song, save it as _revers_fragment_song.wav
-            if (!m_reversedSongPath.isEmpty() && QFileInfo::exists(m_reversedSongPath)) {
-                const QString reversFragmentSongFileName = projectName + QStringLiteral("_revers_fragment_song.wav");
-                const QString reversFragmentSongPath = projectDir + QDir::separator() + reversFragmentSongFileName;
-                if (QFile::copy(m_reversedSongPath, reversFragmentSongPath)) {
-                    LOG_INFO() << "Copied reversed glued song to" << reversFragmentSongPath;
-                } else {
-                    LOG_WARN() << "Failed to copy reversed glued song from" << m_reversedSongPath << "to" << reversFragmentSongPath;
-                }
-            }
+            LOG_WARN() << "Failed to copy microphone recording from" << originalPath << "to" << originalSavePath;
+        }
+    }
+    
+    // Save reversed glued song to the specified path (with "rev" in name)
+    if (!m_reversedSongPath.isEmpty() && QFileInfo::exists(m_reversedSongPath)) {
+        // Remove destination if it exists
+        if (QFileInfo::exists(reversedFilePath)) {
+            QFile::remove(reversedFilePath);
         }
         
-        // Create .vups file that points to project.json in the project directory
-        // This allows users to double-click .vups file to open the project
-        const QString vupsFilePath = filePath; // Full path to .vups file
-        const QString projectJsonPath = projectDir + QDir::separator() + QStringLiteral("project.json");
-        
-        // Copy project.json to .vups file (or create a link file)
-        // For simplicity, we'll copy the project.json content to .vups
-        if (QFileInfo::exists(projectJsonPath)) {
-            if (QFile::copy(projectJsonPath, vupsFilePath)) {
-                LOG_INFO() << "Created .vups file at" << vupsFilePath;
-            } else {
-                // If copy fails (e.g., file already exists), try to overwrite
-                if (QFileInfo::exists(vupsFilePath)) {
-                    QFile::remove(vupsFilePath);
-                    if (QFile::copy(projectJsonPath, vupsFilePath)) {
-                        LOG_INFO() << "Created .vups file at" << vupsFilePath;
-                    } else {
-                        LOG_WARN() << "Failed to create .vups file at" << vupsFilePath;
-                    }
-                } else {
-                    LOG_WARN() << "Failed to create .vups file at" << vupsFilePath;
-                }
-            }
+        if (QFile::copy(m_reversedSongPath, reversedFilePath)) {
+            setStatusMessage(tr("Результаты сохранены: %1").arg(reversedFilePath));
+            LOG_INFO() << "Copied reversed glued song to" << reversedFilePath;
         } else {
-            LOG_WARN() << "project.json not found, cannot create .vups file";
+            setStatusMessage(tr("Ошибка сохранения: не удалось скопировать файл"));
+            LOG_WARN() << "Failed to copy reversed glued song from" << m_reversedSongPath << "to" << reversedFilePath;
         }
-        
-        setStatusMessage(tr("Проект сохранен: %1").arg(filePath));
-        LOG_INFO() << "Project saved successfully";
     } else {
-        setStatusMessage(info);
-        LOG_WARN() << "Failed to save project:" << info;
+        setStatusMessage(tr("Ошибка: перевёрнутая запись не найдена. Сначала склейте сегменты и создайте перевёрнутую запись."));
+        LOG_WARN() << "Reversed glued song not found, cannot save results";
     }
 }
 
@@ -385,6 +360,42 @@ void AppController::openProjectFrom(const QString &projectFilePath)
         } else {
             LOG_WARN() << "Failed to load original audio:" << error;
         }
+    }
+
+    // Load glued song and reversed song if they exist in project directory
+    QFileInfo projectFileInfo(actualProjectPath);
+    QDir projectDir = projectFileInfo.absoluteDir();
+    QString projectName = m_project.projectName();
+    
+    // If project.json is in a subdirectory (project name directory), use that
+    // Otherwise, use the directory containing project.json
+    if (projectFileInfo.fileName() == QStringLiteral("project.json")) {
+        // project.json is in the project directory
+        // projectDir is already correct
+    } else {
+        // .vups file was used, project directory is a subdirectory
+        QString projectNameFromFile = projectFileInfo.completeBaseName();
+        QString possibleProjectDir = projectFileInfo.absolutePath() + QDir::separator() + projectNameFromFile;
+        if (QFileInfo::exists(possibleProjectDir)) {
+            projectDir = QDir(possibleProjectDir);
+        }
+    }
+    
+    // Try to find glued song files
+    QString fragmentSongPath = projectDir.absoluteFilePath(projectName + QStringLiteral("_fragment_song.wav"));
+    if (QFileInfo::exists(fragmentSongPath)) {
+        m_project.setDecodedFilePath(fragmentSongPath);
+        LOG_INFO() << "Found glued song at" << fragmentSongPath;
+    } else {
+        LOG_INFO() << "Glued song file not found at" << fragmentSongPath;
+    }
+    
+    QString reversFragmentSongPath = projectDir.absoluteFilePath(projectName + QStringLiteral("_revers_fragment_song.wav"));
+    if (QFileInfo::exists(reversFragmentSongPath)) {
+        m_reversedSongPath = reversFragmentSongPath;
+        LOG_INFO() << "Found reversed glued song at" << reversFragmentSongPath;
+    } else {
+        LOG_INFO() << "Reversed song file not found at" << reversFragmentSongPath;
     }
 
     // Segments are already loaded from JSON, no need to re-split

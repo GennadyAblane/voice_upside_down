@@ -153,9 +153,9 @@ ApplicationWindow {
             spacing: 24
 
             Rectangle {
-                Layout.preferredWidth: 420
-                Layout.minimumWidth: 360
-                Layout.maximumWidth: 480
+                Layout.preferredWidth: 280
+                Layout.minimumWidth: 240
+                Layout.maximumWidth: 320
                 Layout.fillHeight: true
                 gradient: Gradient {
                     GradientStop { position: 0.0; color: Theme.Theme.colors.accentLight }
@@ -174,29 +174,11 @@ ApplicationWindow {
                 ColumnLayout {
                     anchors.fill: parent
                     anchors.margins: 16
-                    spacing: 16
+                    spacing: 12
 
-                    RowLayout {
+                    ColumnLayout {
                         Layout.fillWidth: true
-                        spacing: 12
-                        PrimaryButton {
-                            Layout.fillWidth: true
-                            text: qsTr("Открыть проект")
-                            secondary: true
-                            onClicked: openProjectDialog.open()
-                        }
-                        PrimaryButton {
-                            Layout.fillWidth: true
-                            text: qsTr("Сохранить проект")
-                            secondary: true
-                            enabled: controller && controller.projectReady
-                            onClicked: saveProjectDialog.open()
-                        }
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 12
+                        spacing: 8
                         PrimaryButton {
                             Layout.fillWidth: true
                             text: qsTr("Загрузить файл")
@@ -217,13 +199,6 @@ ApplicationWindow {
                         }
                     }
 
-                    Label {
-                        Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                        text: controller ? controller.currentSourceName : qsTr("Песня не выбрана")
-                        color: "#c41e3a"  // единый цвет текста
-                    }
-
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: 12
@@ -241,6 +216,13 @@ ApplicationWindow {
                             value: controller ? controller.segmentLength : 5
                             onValueModified: controller ? controller.changeSegmentLength(value) : null
                         }
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        text: controller ? controller.currentSourceName : qsTr("Песня не выбрана")
+                        color: "#c41e3a"  // единый цвет текста
                     }
 
                     Item { Layout.fillHeight: true }
@@ -406,6 +388,13 @@ ApplicationWindow {
                 enabled: controller ? controller.canPlayReverse : false
                 onClicked: controller ? controller.toggleSongReversePlayback() : null
             }
+            PrimaryButton {
+                Layout.preferredWidth: 200
+                text: qsTr("Сохранить результаты")
+                secondary: true
+                enabled: controller && controller.projectReady && controller.canPlayReverse
+                onClicked: saveResultsDialog.open()
+            }
             Item { Layout.fillWidth: true }
         }
     }
@@ -428,11 +417,11 @@ ApplicationWindow {
     }
 
     FileDialog {
-        id: saveProjectDialog
-        title: qsTr("Сохранить проект")
-        nameFilters: ["Voice Upside Down Project (*.vups)", "All files (*)"]
+        id: saveResultsDialog
+        title: qsTr("Сохранить результаты")
+        nameFilters: ["WAV files (*.wav)", "All files (*)"]
         selectExisting: false
-        defaultSuffix: "vups"
+        defaultSuffix: "wav"
         onAccepted: {
             if (controller) {
                 var filePath = "";
@@ -483,77 +472,7 @@ ApplicationWindow {
                     return;
                 }
                 
-                // Extract project name from file path (without extension)
-                var fileName = filePath;
-                // Handle both forward and backslashes
-                var lastSlash = Math.max(fileName.lastIndexOf('/'), fileName.lastIndexOf('\\'));
-                if (lastSlash !== -1) {
-                    fileName = fileName.substring(lastSlash + 1);
-                }
-                
-                // Remove .vups extension if present
-                var projectName = fileName;
-                if (projectName.toLowerCase().endsWith('.vups')) {
-                    projectName = projectName.substring(0, projectName.length - 5);
-                }
-                
-                controller.setProjectName(projectName);
                 controller.saveProjectTo(filePath);
-            }
-        }
-    }
-
-    FileDialog {
-        id: openProjectDialog
-        title: qsTr("Открыть проект")
-        nameFilters: ["Voice Upside Down Project (*.vups)", "All files (*)"]
-        onAccepted: {
-            if (controller) {
-                var filePath = "";
-                
-                // Convert URL to local file path (same approach as saveProjectDialog)
-                if (fileUrl && typeof fileUrl.toLocalFile === "function") {
-                    filePath = fileUrl.toLocalFile();
-                } else if (typeof fileUrl === "string") {
-                    // Fallback: handle string manually
-                    filePath = fileUrl;
-                    if (filePath.indexOf("file://") === 0) {
-                        filePath = filePath.substring(7); // Remove "file://"
-                        while (filePath.length > 0 && filePath.charAt(0) === '/') {
-                            filePath = filePath.substring(1);
-                        }
-                    }
-                    try {
-                        filePath = decodeURIComponent(filePath);
-                    } catch (e) {
-                        // If decode fails, use as-is
-                    }
-                } else {
-                    // Try toString() as last resort
-                    try {
-                        var urlString = String(fileUrl);
-                        filePath = urlString;
-                        if (filePath.indexOf("file://") === 0) {
-                            filePath = filePath.substring(7);
-                            while (filePath.length > 0 && filePath.charAt(0) === '/') {
-                                filePath = filePath.substring(1);
-                            }
-                        }
-                        try {
-                            filePath = decodeURIComponent(filePath);
-                        } catch (e) {
-                            // If decode fails, use as-is
-                        }
-                    } catch (e) {
-                        console.error("Failed to convert fileUrl to string:", e);
-                    }
-                }
-                
-                if (filePath && filePath.length > 0) {
-                    controller.openProjectFrom(filePath);
-                } else {
-                    console.error("Invalid file path for opening project");
-                }
             }
         }
     }
