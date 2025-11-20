@@ -72,6 +72,9 @@ AppController::AppController(QObject *parent)
                 loadAudioSource(filePath);
                 setStatusMessage(tr("Запись завершена и загружена"));
                 LOG_INFO() << "Source recording stopped and loaded";
+                // Emit signals for source type and save state changes
+                emit sourceTypeChanged();
+                emit saveStateChanged();
             } else {
                 setStatusMessage(tr("Запись остановлена"));
                 LOG_WARN() << "Source recording stopped but file not found:" << filePath;
@@ -171,6 +174,46 @@ bool AppController::recordingReady() const
     return m_recordingReady;
 }
 
+bool AppController::isMicrophoneSource() const
+{
+    if (!m_projectReady)
+        return false;
+    
+    const QString originalPath = m_project.originalFilePath();
+    if (originalPath.isEmpty())
+        return false;
+    
+    QFileInfo originalInfo(originalPath);
+    return originalInfo.fileName() == QStringLiteral("source_recording.wav");
+}
+
+bool AppController::canSaveResults() const
+{
+    if (!m_projectReady)
+        return false;
+    
+    // If source is from microphone, button is always enabled
+    if (isMicrophoneSource())
+        return true;
+    
+    // If source is loaded file, button is enabled only if reverse is ready
+    return !m_reversedSongPath.isEmpty() && QFileInfo::exists(m_reversedSongPath);
+}
+
+bool AppController::originalPlaybackEnabled() const
+{
+    return m_originalPlaybackEnabled;
+}
+
+void AppController::setOriginalPlaybackEnabled(bool enabled)
+{
+    if (m_originalPlaybackEnabled == enabled)
+        return;
+    
+    m_originalPlaybackEnabled = enabled;
+    emit originalPlaybackEnabledChanged();
+}
+
 void AppController::loadAudioSource(const QString &filePath)
 {
     if (filePath.isEmpty()) {
@@ -214,6 +257,8 @@ void AppController::loadAudioSource(const QString &filePath)
     emit canAdjustSegmentLengthChanged();
     emit segmentHintTextChanged();
     emit interactionsStateChanged();
+    emit sourceTypeChanged();
+    emit saveStateChanged();
 
     setStatusMessage(tr("Файл загружен: %1").arg(m_currentSourceName));
     LOG_INFO() << "Audio source loaded successfully:" << m_currentSourceName << "segments:" << m_project.segments().size();
@@ -298,7 +343,7 @@ void AppController::saveProjectTo(const QString &filePath)
     if (!m_projectReady)
         return;
 
-    // filePath is the full path to WAV file where we'll save the reversed glued song
+    // filePath is the full path to WAV file where we'll save
     // Extract directory and file name
     QFileInfo fileInfo(filePath);
     QString directoryPath = fileInfo.absolutePath();
@@ -307,60 +352,96 @@ void AppController::saveProjectTo(const QString &filePath)
     
     LOG_INFO() << "Saving results to" << filePath;
     
-    // Check if original file is from microphone recording
+    // Check if source is from microphone recording
+    bool isMicSource = isMicrophoneSource();
     const QString originalPath = m_project.originalFilePath();
-    bool isMicrophoneRecording = false;
-    if (!originalPath.isEmpty()) {
-        QFileInfo originalInfo(originalPath);
-        isMicrophoneRecording = originalInfo.fileName() == QStringLiteral("source_recording.wav");
-    }
+    bool reverseReady = !m_reversedSongPath.isEmpty() && QFileInfo::exists(m_reversedSongPath);
     
-    // Determine the name for reversed file (add "rev" if not present)
-    QString reversedFileName = fileName;
-    if (!reversedFileName.endsWith(QStringLiteral("rev"), Qt::CaseInsensitive)) {
-        reversedFileName = reversedFileName + QStringLiteral("rev");
-    }
-    QString reversedFilePath = directoryPath + QDir::separator() + reversedFileName + QStringLiteral(".") + fileExtension;
+    bool savedSomething = false;
+    QStringList savedFiles;
     
-    // If recording was from microphone, save original file
-    if (isMicrophoneRecording && QFileInfo::exists(originalPath)) {
-        // Save original microphone recording with the same name as the reversed file but without "rev"
-        QString originalFileName = reversedFileName;
-        // Remove "rev" suffix if present
-        if (originalFileName.endsWith(QStringLiteral("rev"), Qt::CaseInsensitive)) {
-            originalFileName = originalFileName.left(originalFileName.length() - 3);
+    // Case 1: Microphone source + reverse NOT ready → save only microphone recording
+    if (isMicSource && !reverseReady) {
+        QString micSavePath = directoryPath + QDir::separator() + fileName + QStringLiteral(".") + fileExtension;
+        if (QFileInfo::exists(originalPath)) {
+            if (QFileInfo::exists(micSavePath)) {
+                QFile::remove(micSavePath);
+            }
+            if (QFile::copy(originalPath, micSavePath)) {
+                savedFiles << micSavePath;
+                savedSomething = true;
+                LOG_INFO() << "Saved microphone recording to" << micSavePath;
+            } else {
+                LOG_WARN() << "Failed to copy microphone recording from" << originalPath << "to" << micSavePath;
+            }
         }
-        QString originalSavePath = directoryPath + QDir::separator() + originalFileName + QStringLiteral(".") + fileExtension;
+    }
+    // Case 2: Microphone source + reverse ready → save both files
+    else if (isMicSource && reverseReady) {
+        // Save microphone recording
+        QString micSavePath = directoryPath + QDir::separator() + fileName + QStringLiteral(".") + fileExtension;
+        if (QFileInfo::exists(originalPath)) {
+            if (QFileInfo::exists(micSavePath)) {
+                QFile::remove(micSavePath);
+            }
+            if (QFile::copy(originalPath, micSavePath)) {
+                savedFiles << micSavePath;
+                savedSomething = true;
+                LOG_INFO() << "Saved microphone recording to" << micSavePath;
+            } else {
+                LOG_WARN() << "Failed to copy microphone recording from" << originalPath << "to" << micSavePath;
+            }
+        }
         
-        // Remove destination if it exists
-        if (QFileInfo::exists(originalSavePath)) {
-            QFile::remove(originalSavePath);
+        // Save reversed file
+        QString reversedFileName = fileName;
+        if (!reversedFileName.endsWith(QStringLiteral("rev"), Qt::CaseInsensitive)) {
+            reversedFileName = reversedFileName + QStringLiteral("rev");
         }
-        
-        if (QFile::copy(originalPath, originalSavePath)) {
-            LOG_INFO() << "Copied microphone recording to" << originalSavePath;
-        } else {
-            LOG_WARN() << "Failed to copy microphone recording from" << originalPath << "to" << originalSavePath;
-        }
-    }
-    
-    // Save reversed glued song to the specified path (with "rev" in name)
-    if (!m_reversedSongPath.isEmpty() && QFileInfo::exists(m_reversedSongPath)) {
-        // Remove destination if it exists
+        QString reversedFilePath = directoryPath + QDir::separator() + reversedFileName + QStringLiteral(".") + fileExtension;
         if (QFileInfo::exists(reversedFilePath)) {
             QFile::remove(reversedFilePath);
         }
-        
         if (QFile::copy(m_reversedSongPath, reversedFilePath)) {
-            setStatusMessage(tr("Результаты сохранены: %1").arg(reversedFilePath));
-            LOG_INFO() << "Copied reversed glued song to" << reversedFilePath;
+            savedFiles << reversedFilePath;
+            savedSomething = true;
+            LOG_INFO() << "Saved reversed song to" << reversedFilePath;
         } else {
-            setStatusMessage(tr("Ошибка сохранения: не удалось скопировать файл"));
-            LOG_WARN() << "Failed to copy reversed glued song from" << m_reversedSongPath << "to" << reversedFilePath;
+            LOG_WARN() << "Failed to copy reversed song from" << m_reversedSongPath << "to" << reversedFilePath;
         }
+    }
+    // Case 3: Loaded file + reverse ready → save only reverse
+    else if (!isMicSource && reverseReady) {
+        QString reversedFileName = fileName;
+        if (!reversedFileName.endsWith(QStringLiteral("rev"), Qt::CaseInsensitive)) {
+            reversedFileName = reversedFileName + QStringLiteral("rev");
+        }
+        QString reversedFilePath = directoryPath + QDir::separator() + reversedFileName + QStringLiteral(".") + fileExtension;
+        if (QFileInfo::exists(reversedFilePath)) {
+            QFile::remove(reversedFilePath);
+        }
+        if (QFile::copy(m_reversedSongPath, reversedFilePath)) {
+            savedFiles << reversedFilePath;
+            savedSomething = true;
+            LOG_INFO() << "Saved reversed song to" << reversedFilePath;
+        } else {
+            LOG_WARN() << "Failed to copy reversed song from" << m_reversedSongPath << "to" << reversedFilePath;
+        }
+    }
+    // Case 4: Loaded file + reverse NOT ready → should not happen (button disabled)
+    else {
+        setStatusMessage(tr("Ошибка: нет данных для сохранения"));
+        LOG_WARN() << "Cannot save: loaded file but reverse not ready";
+        return;
+    }
+    
+    if (savedSomething) {
+        QString filesList = savedFiles.join(QStringLiteral(", "));
+        setStatusMessage(tr("Результаты сохранены: %1").arg(filesList));
+        LOG_INFO() << "Results saved successfully:" << filesList;
     } else {
-        setStatusMessage(tr("Ошибка: перевёрнутая запись не найдена. Сначала склейте сегменты и создайте перевёрнутую запись."));
-        LOG_WARN() << "Reversed glued song not found, cannot save results";
+        setStatusMessage(tr("Ошибка сохранения: не удалось сохранить файлы"));
+        LOG_WARN() << "Failed to save any files";
     }
 }
 
@@ -473,6 +554,8 @@ void AppController::openProjectFrom(const QString &projectFilePath)
     emit segmentHintTextChanged();
     emit glueStateChanged();
     emit reverseStateChanged();
+    emit sourceTypeChanged();
+    emit saveStateChanged();
 
     setStatusMessage(tr("Проект открыт: %1").arg(m_currentSourceName));
     LOG_INFO() << "Project opened successfully:" << m_currentSourceName;
@@ -1033,6 +1116,7 @@ void AppController::reverseSong()
     m_reversedSongPath = reversePath;
     setStatusMessage(tr("Песня реверсирована: %1").arg(reversePath));
     LOG_INFO() << "Song reversed successfully to" << reversePath;
+    emit saveStateChanged(); // Update save button state
 }
 
 void AppController::toggleSongReversePlayback()
@@ -1177,4 +1261,5 @@ const SegmentInfo *AppController::segmentByDisplayIndex(int displayIndex) const
     }
     return nullptr;
 }
+
 

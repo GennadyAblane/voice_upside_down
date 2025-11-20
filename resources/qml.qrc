@@ -7,6 +7,7 @@
         <file alias="theme/Colors.qml">../qml/theme/Colors.qml</file>
         <file alias="theme/Theme.qml">../qml/theme/Theme.qml</file>
         <file alias="theme/qmldir">../qml/theme/qmldir</file>
+        <file alias="el.png">el.png</file>
     </qresource>
 </RCC>
 

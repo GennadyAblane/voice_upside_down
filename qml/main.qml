@@ -27,6 +27,7 @@ ApplicationWindow {
         }
     }
     
+    
     // Анимация плавного изменения градиента
     SequentialAnimation on animatedBackgroundStart {
         running: true
@@ -132,6 +133,22 @@ ApplicationWindow {
             text: controller ? controller.statusMessage : qsTr("Готово")
             color: "#c41e3a"  // единый цвет текста
             font.pixelSize: Theme.Theme.baseFontSize
+        }
+        
+        // Switch для управления воспроизведением оригиналов - в незаметном месте
+        Switch {
+            id: originalPlaybackSwitch
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.right: parent.right
+            anchors.rightMargin: 24
+            visible: controller && controller.segmentModel && controller.segmentModel.hasData
+            checked: controller ? controller.originalPlaybackEnabled : false
+            opacity: 0.3  // Полупрозрачный для незаметности
+            onToggled: {
+                if (controller) {
+                    controller.originalPlaybackEnabled = checked
+                }
+            }
         }
     }
 
@@ -245,6 +262,23 @@ ApplicationWindow {
                            horizontalOffset: 0
                            verticalOffset: 3
                        }
+                
+                // Ёлка в рамке с отрезками (за отрезками, но над фоном)
+                // Показывается только если отрезков 2 или меньше
+                Image {
+                    id: treeImage
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    anchors.rightMargin: 20
+                    anchors.bottomMargin: 20
+                    width: 300  // Исходный размер
+                    height: 400  // Исходный размер
+                    fillMode: Image.PreserveAspectFit
+                    source: "qrc:/el.png"
+                    opacity: 0.6
+                    z: 0 // Над фоном, но под ListView
+                    visible: segmentList.count <= 2  // Показывать только если 2 или меньше отрезков
+                }
 
                 ListView {
                     id: segmentList
@@ -252,6 +286,7 @@ ApplicationWindow {
                     anchors.margins: 16
                     spacing: 12
                     clip: true
+                    z: 1 // Поверх ёлки
                     model: controller ? controller.segmentModel : null
                     
                     // Save scroll position to restore after model updates
@@ -347,6 +382,7 @@ ApplicationWindow {
                         recordingPlaying: controller ? controller.isSegmentRecordingPlaying(model.segmentIndex) : false
                         reversePlaying: controller ? controller.isSegmentReversePlaying(model.segmentIndex) : false
                         enabled: controller ? controller.interactionsEnabled : false
+                        originalPlaybackEnabled: controller ? controller.originalPlaybackEnabled : false
 
                         onRecordTriggered: controller ? controller.toggleSegmentRecording(model.segmentIndex) : null
                         onOriginalPlayTriggered: controller ? controller.toggleSegmentOriginalPlayback(model.segmentIndex) : null
@@ -392,7 +428,7 @@ ApplicationWindow {
                 Layout.preferredWidth: 200
                 text: qsTr("Сохранить результаты")
                 secondary: true
-                enabled: controller && controller.projectReady && controller.canPlayReverse
+                enabled: controller && controller.canSaveResults
                 onClicked: saveResultsDialog.open()
             }
             Item { Layout.fillWidth: true }
@@ -477,11 +513,11 @@ ApplicationWindow {
         }
     }
 
-    // Snowflakes falling across entire screen when dialog is visible
+    // Snowflakes falling across entire screen - always visible
     Item {
         id: screenSnowflakes
         anchors.fill: parent
-        visible: controller && controller.recordingDialogVisible
+        visible: true // Always visible
         z: 9999 // Below dialog but above content
 
         // Snowflake component
@@ -522,7 +558,7 @@ ApplicationWindow {
                 property real startDelay: (index * 97) % 3000 // Random delay up to 3 seconds
                 
                 SequentialAnimation on y {
-                    running: screenSnowflakes.visible
+                    running: true // Always running
                     loops: Animation.Infinite
                     PauseAnimation { duration: screenSnowflakeLoader.startDelay }
                     NumberAnimation {
@@ -548,7 +584,7 @@ ApplicationWindow {
                 }
                 
                 SequentialAnimation on x {
-                    running: screenSnowflakes.visible
+                    running: true // Always running
                     loops: Animation.Infinite
                     PauseAnimation { duration: screenSnowflakeLoader.startDelay }
                     NumberAnimation {

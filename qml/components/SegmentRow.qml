@@ -15,6 +15,7 @@ Item {
     property bool recordingPlaying: false
     property bool reversePlaying: false
     property bool enabled: true
+    property bool originalPlaybackEnabled: false
 
     signal recordTriggered()
     signal originalPlayTriggered()
@@ -106,7 +107,7 @@ Item {
                 Layout.fillWidth: false
                 text: originalPlaying ? qsTr("Стоп") : qsTr("Воспроизвести\nоригинал")
                 secondary: true
-                enabled: root.enabled
+                enabled: root.enabled && root.originalPlaybackEnabled
                 onClicked: root.originalPlayTriggered()
             }
 
