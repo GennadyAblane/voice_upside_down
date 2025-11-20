@@ -16,13 +16,15 @@ Item {
     property bool reversePlaying: false
     property bool enabled: true
     property bool originalPlaybackEnabled: false
+    property int segmentIndex: -1
+    property var segmentController: null
 
     signal recordTriggered()
     signal originalPlayTriggered()
     signal recordingPlayTriggered()
     signal reversePlayTriggered()
 
-    implicitHeight: 120  // Increased to accommodate taller buttons
+    implicitHeight: 200
     implicitWidth: parent ? parent.width : 800
 
     Rectangle {
@@ -62,22 +64,133 @@ Item {
 
             Label {
                 text: qsTr("Длительность: %1").arg(durationText)
-                color: "#c41e3a"  // единый цвет текста
+                color: "#c41e3a"
                 font.family: Theme.Theme.fontFamily
                 font.pixelSize: Theme.Theme.baseFontSize
                 Layout.alignment: Qt.AlignVCenter
             }
 
-            Item { Layout.fillWidth: true }  // Spacer
+            Item { Layout.fillWidth: true }
 
             Label {
                 text: recorded ? qsTr("Записан") : qsTr("Не записан")
-                color: "#c41e3a"  // единый цвет текста
+                color: "#c41e3a"
             }
 
             Label {
                 text: reversed ? qsTr("Реверс готов") : ""
-                color: "#c41e3a"  // единый цвет текста
+                color: "#c41e3a"
+            }
+        }
+
+        // Waveform во всю ширину отрезка
+        WaveformView {
+            id: segmentWaveform
+            Layout.fillWidth: true
+            Layout.preferredHeight: 90
+            visible: root.recorded && root.segmentController && root.segmentIndex >= 0
+            noiseThreshold: root.segmentController ? root.segmentController.segmentNoiseThreshold : 0.1
+            showSegments: false
+            segments: []
+            interactive: true  // Enable interaction for trim boundaries
+            showTrimBoundaries: root.recorded && root.segmentController && root.segmentIndex >= 0
+            
+            // Playback position tracking
+            playbackPositionMs: {
+                if (!root.segmentController || root.segmentIndex < 0)
+                    return -1
+                // Check if this segment is being played
+                var activeIndex = root.segmentController.activePlaybackSegmentIndex
+                if (activeIndex === root.segmentIndex) {
+                    return root.segmentController.playbackPositionMs
+                }
+                return -1
+            }
+            segmentStartMs: {
+                if (!root.segmentController || root.segmentIndex < 0)
+                    return 0
+                // For original playback, we need the segment start in the original audio
+                var isOriginal = root.segmentController.isPlayingOriginalSegment
+                if (isOriginal && root.segmentController.activePlaybackSegmentIndex === root.segmentIndex) {
+                    return root.segmentController.getSegmentStartMs(root.segmentIndex)
+                }
+                // For recorded playback, we need to account for trimmed start
+                // The waveform shows the full recording, but playback starts from trimmed position
+                if (!isOriginal && root.segmentController.activePlaybackSegmentIndex === root.segmentIndex) {
+                    return root.segmentController.getSegmentRecordingTrimmedStartMs(root.segmentIndex)
+                }
+                return 0
+            }
+
+            property var segmentWaveformData: []
+            property var trimBoundaries: ({trimStartMs: -1.0, trimEndMs: -1.0})
+
+            function updateWaveform() {
+                if (!root.segmentController || root.segmentIndex < 0 || !root.recorded) {
+                    segmentWaveformData = []
+                    volumeData = []
+                    trimBoundaries = {trimStartMs: -1.0, trimEndMs: -1.0}
+                    return
+                }
+                var data = root.segmentController.analyzeSegmentRecording(root.segmentIndex, 100)
+                segmentWaveformData = data
+                volumeData = data
+                
+                // Update trim boundaries
+                var boundaries = root.segmentController.getSegmentTrimBoundaries(root.segmentIndex)
+                trimBoundaries = boundaries
+                trimStartMs = boundaries.trimStartMs || -1.0
+                trimEndMs = boundaries.trimEndMs || -1.0
+            }
+            
+            trimStartMs: trimBoundaries.trimStartMs || -1.0
+            trimEndMs: trimBoundaries.trimEndMs || -1.0
+
+            Component.onCompleted: {
+                if (root.recorded) {
+                    Qt.callLater(updateWaveform)
+                }
+            }
+
+            Connections {
+                target: root
+                function onRecordedChanged() {
+                    if (root.recorded) {
+                        Qt.callLater(segmentWaveform.updateWaveform)
+                    } else {
+                        segmentWaveform.segmentWaveformData = []
+                        segmentWaveform.volumeData = []
+                    }
+                }
+            }
+
+            Connections {
+                target: root.segmentController
+                enabled: root.segmentController !== null
+                function onVolumeSettingsChanged() {
+                    if (root.recorded && root.segmentIndex >= 0) {
+                        Qt.callLater(segmentWaveform.updateWaveform)
+                    }
+                }
+            }
+            
+            Connections {
+                target: segmentWaveform
+                function onTrimBoundaryChanged(trimStartMs, trimEndMs) {
+                    if (root.segmentController && root.segmentIndex >= 0 && trimStartMs >= 0 && trimEndMs >= 0) {
+                        root.segmentController.setSegmentTrimBoundaries(root.segmentIndex, trimStartMs, trimEndMs)
+                    }
+                }
+            }
+            
+            Connections {
+                target: root.segmentController
+                enabled: root.segmentController !== null
+                function onSegmentsUpdated() {
+                    if (root.recorded && root.segmentIndex >= 0) {
+                        Qt.callLater(segmentWaveform.updateWaveform)
+                    }
+                }
             }
         }
 
@@ -122,4 +235,3 @@ Item {
         }
     }
 }
-

@@ -5,6 +5,8 @@
 #include <QBuffer>
 #include <QFile>
 #include <QScopedPointer>
+#include <QTimer>
+#include <QElapsedTimer>
 #include <memory>
 
 #include "wavutils.h"
@@ -18,12 +20,21 @@ public:
     std::unique_ptr<QFile> fileDevice;
     QByteArray bufferData;
     bool playing = false;
+    
+    QAudioFormat format;
+    QTimer *positionTimer = nullptr;
+    QElapsedTimer elapsedTimer;
+    qint64 totalBytes = 0;
+    double durationMs = 0.0;
 };
 
 AudioPlaybackEngine::AudioPlaybackEngine(QObject *parent)
     : QObject(parent)
     , d(new Impl())
 {
+    d->positionTimer = new QTimer(this);
+    d->positionTimer->setInterval(50); // Update every 50ms for smooth animation
+    connect(d->positionTimer, &QTimer::timeout, this, &AudioPlaybackEngine::updatePlaybackPosition);
 }
 
 AudioPlaybackEngine::~AudioPlaybackEngine()
@@ -42,6 +53,19 @@ bool AudioPlaybackEngine::playBuffer(const QByteArray &pcm, const QAudioFormat &
     stopAll();
 
     d->bufferData = pcm;
+    d->format = format;
+    d->totalBytes = pcm.size();
+    
+    // Calculate duration in milliseconds
+    int bytesPerFrame = format.channelCount() * (format.sampleSize() / 8);
+    int sampleRate = format.sampleRate();
+    if (bytesPerFrame > 0 && sampleRate > 0) {
+        qint64 totalFrames = d->totalBytes / bytesPerFrame;
+        d->durationMs = (totalFrames * 1000.0) / sampleRate;
+    } else {
+        d->durationMs = 0.0;
+    }
+    
     d->bufferDevice = std::make_unique<QBuffer>(&d->bufferData);
     d->bufferDevice->open(QIODevice::ReadOnly);
 
@@ -58,6 +82,8 @@ bool AudioPlaybackEngine::playBuffer(const QByteArray &pcm, const QAudioFormat &
 
     d->output->start(d->bufferDevice.get());
     d->playing = true;
+    d->elapsedTimer.start();
+    d->positionTimer->start();
     return true;
 }
 
@@ -76,6 +102,7 @@ bool AudioPlaybackEngine::playFile(const QString &filePath)
 
 void AudioPlaybackEngine::stopAll()
 {
+    d->positionTimer->stop();
     if (d->output) {
         d->output->stop();
         d->output.reset();
@@ -89,10 +116,36 @@ void AudioPlaybackEngine::stopAll()
         d->fileDevice.reset();
     }
     d->playing = false;
+    d->totalBytes = 0;
+    d->durationMs = 0.0;
+    emit playbackPositionChanged();
 }
 
 bool AudioPlaybackEngine::isPlaying() const
 {
     return d->playing;
+}
+
+double AudioPlaybackEngine::playbackPositionMs() const
+{
+    if (!d->playing || !d->output) {
+        return 0.0;
+    }
+    
+    // Use processedUSecs() to get accurate position
+    qint64 processedUSecs = d->output->processedUSecs();
+    return processedUSecs / 1000.0; // Convert microseconds to milliseconds
+}
+
+double AudioPlaybackEngine::durationMs() const
+{
+    return d->durationMs;
+}
+
+void AudioPlaybackEngine::updatePlaybackPosition()
+{
+    if (d->playing) {
+        emit playbackPositionChanged();
+    }
 }
 

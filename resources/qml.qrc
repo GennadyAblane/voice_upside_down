@@ -4,10 +4,13 @@
         <file alias="components/SegmentRow.qml">../qml/components/SegmentRow.qml</file>
         <file alias="components/PrimaryButton.qml">../qml/components/PrimaryButton.qml</file>
         <file alias="components/StatusBadge.qml">../qml/components/StatusBadge.qml</file>
+        <file alias="components/WaveformView.qml">../qml/components/WaveformView.qml</file>
         <file alias="theme/Colors.qml">../qml/theme/Colors.qml</file>
         <file alias="theme/Theme.qml">../qml/theme/Theme.qml</file>
         <file alias="theme/qmldir">../qml/theme/qmldir</file>
         <file alias="el.png">el.png</file>
+        <file alias="1.png">1.png</file>
+        <file alias="2.png">2.png</file>
     </qresource>
 </RCC>
 

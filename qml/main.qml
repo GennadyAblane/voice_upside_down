@@ -6,13 +6,14 @@ import QtGraphicalEffects 1.15
 import "components"
 import "theme" as Theme
 
-ApplicationWindow {
-    id: window
-    width: 1280
-    height: 760
-    visible: true
-    title: qsTr("Voice Upside Down")
-    font.family: Theme.Theme.fontFamily
+    ApplicationWindow {
+        id: window
+        width: 1280
+        height: 860
+        minimumHeight: 800
+        visible: true
+        title: qsTr("Voice Upside Down")
+        font.family: Theme.Theme.fontFamily
     
     // Свойства для анимации градиента
     property color animatedBackgroundStart: Theme.Theme.colors.backgroundStart
@@ -110,6 +111,45 @@ ApplicationWindow {
             font.bold: true
             color: "#c41e3a"  // единый цвет текста
         }
+        
+        // Кнопка настроек с иконкой
+        Button {
+            id: settingsButton
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.rightMargin: 16
+            width: 40
+            height: 40
+            background: Rectangle {
+                color: settingsButton.pressed ? "#e0e0e0" : "transparent"
+                radius: 4
+            }
+            
+            Image {
+                id: settingsIcon
+                anchors.centerIn: parent
+                width: 32
+                height: 32
+                source: "qrc:/1.png"
+                fillMode: Image.PreserveAspectFit
+            }
+            
+            onClicked: {
+                // Переключить иконку на 800мс
+                settingsIcon.source = "qrc:/2.png"
+                iconSwitchTimer.start()
+                // Открыть диалог настроек
+                settingsDialog.visible = true
+            }
+            
+            Timer {
+                id: iconSwitchTimer
+                interval: 800
+                onTriggered: {
+                    settingsIcon.source = "qrc:/1.png"
+                }
+            }
+        }
     }
 
     footer: Rectangle {
@@ -194,8 +234,54 @@ ApplicationWindow {
                     spacing: 12
 
                     ColumnLayout {
+                        id: segmentNoiseControls
                         Layout.fillWidth: true
                         spacing: 8
+                        
+                        // Timer для принудительного обновления waveform при изменении порога
+                        Timer {
+                            id: segmentWaveformUpdateTimer
+                            interval: 10
+                            repeat: false
+                            onTriggered: {
+                                // Принудительно эмитируем сигнал volumeSettingsChanged
+                                if (controller) {
+                                    // Временно изменяем значение на достаточную величину, чтобы пройти проверку в C++
+                                    var currentValue = controller.segmentNoiseThreshold
+                                    var tempValue = currentValue < 0.5 ? currentValue + 0.001 : currentValue - 0.001
+                                    controller.segmentNoiseThreshold = tempValue
+                                    Qt.callLater(function() {
+                                        controller.segmentNoiseThreshold = currentValue
+                                    })
+                                }
+                            }
+                        }
+                        
+                        function updateSegmentNoise(value, options) {
+                            var clamped = Math.max(0.0001, Math.min(1.0, value || 0.0))
+                            if (!(options && options.skipController) && controller) {
+                                var oldValue = controller.segmentNoiseThreshold
+                                controller.segmentNoiseThreshold = clamped
+                                // Если изменение слишком мало (меньше 0.001), принудительно обновляем через Timer
+                                if (Math.abs(oldValue - clamped) < 0.001 && Math.abs(oldValue - clamped) > 0.0000001) {
+                                    segmentWaveformUpdateTimer.start()
+                                }
+                            }
+                            var dB = 20 * Math.log10(clamped)
+                            // Конвертируем дБ в линейную позицию бегунка (от 0.0 до 1.0)
+                            // dB от -80 до 0, slider от 0.0 до 1.0
+                            var sliderValue = (dB + 80) / 80
+                            if (!(options && options.skipSlider)) {
+                                segmentNoiseSlider.updatingFromInput = true
+                                segmentNoiseSlider.value = Math.max(0.0, Math.min(1.0, sliderValue))
+                                segmentNoiseSlider.updatingFromInput = false
+                            }
+                            if (!(options && options.skipSpinBox)) {
+                                segmentNoiseDbInput.updatingFromSlider = true
+                                segmentNoiseDbInput.value = Math.round(dB)  // Конвертируем в целое число дБ
+                                segmentNoiseDbInput.updatingFromSlider = false
+                            }
+                        }
                         PrimaryButton {
                             Layout.fillWidth: true
                             text: qsTr("Загрузить файл")
@@ -216,22 +302,184 @@ ApplicationWindow {
                         }
                     }
 
+                    // Длина отрезка
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: 12
                         Label {
                             text: qsTr("Длина отрезка")
-                            color: "#c41e3a"  // единый цвет текста
+                            color: "#c41e3a"
+                            font.pixelSize: 14
                             Layout.alignment: Qt.AlignVCenter
                         }
                         SpinBox {
                             id: segmentLengthSpin
-                            Layout.preferredWidth: 100
+                            Layout.preferredWidth: 120
                             from: 1
                             to: 10
                             enabled: controller && controller.canAdjustSegmentLength
                             value: controller ? controller.segmentLength : 5
                             onValueModified: controller ? controller.changeSegmentLength(value) : null
+                            
+                            // Уменьшаем размер кнопок +/-
+                            up.indicator.implicitWidth: 20
+                            down.indicator.implicitWidth: 20
+                        }
+                    }
+                    
+                    // Шум записи
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 12
+                        Label {
+                            text: qsTr("Шум записи")
+                            color: "#c41e3a"
+                            font.pixelSize: 14
+                            Layout.alignment: Qt.AlignVCenter
+                        }
+                        SpinBox {
+                            id: segmentNoiseDbInput
+                            Layout.preferredWidth: 120
+                            from: -80
+                            to: 0
+                            stepSize: 1
+                            editable: true
+                            property bool updatingFromSlider: false
+                            
+                            // Уменьшаем размер кнопок +/-
+                            up.indicator.implicitWidth: 20
+                            down.indicator.implicitWidth: 20
+                            
+                            function dBToValue(dB) { return Math.pow(10, dB / 20) }
+                            
+                            // Отображать значение в дБ (value хранится напрямую, например -20 для -20 дБ)
+                            property real dBValue: value
+                            
+                            // Функция для форматирования значения в текст
+                            function formatValue(val) {
+                                return val.toString()
+                            }
+                            
+                            // Функция для парсинга текста в значение
+                            function parseValue(text) {
+                                var dB = parseInt(text)
+                                if (isNaN(dB)) return -20
+                                dB = Math.max(-80, Math.min(0, dB))
+                                return dB
+                            }
+                            
+                            // Кастомный contentItem для отображения значения в дБ
+                            contentItem: TextInput {
+                                text: segmentNoiseDbInput.formatValue(segmentNoiseDbInput.value)
+                                font: segmentNoiseDbInput.font
+                                color: segmentNoiseDbInput.palette.text
+                                selectionColor: segmentNoiseDbInput.palette.highlight
+                                selectedTextColor: segmentNoiseDbInput.palette.highlightedText
+                                horizontalAlignment: Qt.AlignHCenter
+                                verticalAlignment: Qt.AlignVCenter
+                                readOnly: !segmentNoiseDbInput.editable
+                                validator: IntValidator {
+                                    bottom: -80
+                                    top: 0
+                                }
+                                inputMethodHints: Qt.ImhFormattedNumbersOnly
+                                
+                                onEditingFinished: {
+                                    if (!segmentNoiseDbInput.updatingFromSlider) {
+                                        var newValue = segmentNoiseDbInput.parseValue(text)
+                                        if (newValue !== segmentNoiseDbInput.value) {
+                                            segmentNoiseDbInput.value = newValue
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            Component.onCompleted: {
+                                if (controller) {
+                                    segmentNoiseControls.updateSegmentNoise(controller.segmentNoiseThreshold, { skipController: true, skipSlider: false, skipSpinBox: false })
+                                } else {
+                                    value = -20  // -20 дБ
+                                }
+                            }
+                            
+                            Connections {
+                                target: controller
+                                function onVolumeSettingsChanged() {
+                                    if (controller) {
+                                        segmentNoiseControls.updateSegmentNoise(controller.segmentNoiseThreshold, { skipController: true })
+                                    }
+                                }
+                            }
+                            
+                            onValueChanged: {
+                                if (updatingFromSlider)
+                                    return
+                                var dB = dBValue
+                                var linearValue = dBToValue(dB)
+                                var clampedValue = Math.max(0.0001, Math.min(1.0, linearValue))
+                                // Конвертируем dB в позицию бегунка (0.0-1.0 соответствует -80 до 0 dB)
+                                var sliderPos = (dB + 80) / 80
+                                console.log("SegmentNoise SpinBox changed: dB =", dB, "linear value =", clampedValue, "slider position =", sliderPos)
+                                segmentNoiseSlider.updatingFromInput = true
+                                segmentNoiseSlider.value = Math.max(0.0, Math.min(1.0, sliderPos))
+                                segmentNoiseSlider.updatingFromInput = false
+                                segmentNoiseControls.updateSegmentNoise(clampedValue, { skipSpinBox: true })
+                            }
+                        }
+                        
+                        Label {
+                            text: qsTr("dB")
+                            color: "#c41e3a"
+                            font.pixelSize: 14
+                            Layout.alignment: Qt.AlignVCenter
+                        }
+                    }
+                    
+                    // Бегунок для шума записи
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 12
+                        Label {
+                            text: qsTr("min")
+                            Layout.preferredWidth: 30
+                            color: "#c41e3a"
+                            font.pixelSize: 12
+                        }
+                        
+                        Slider {
+                            id: segmentNoiseSlider
+                            Layout.fillWidth: true
+                            from: 0.0
+                            to: 1.0
+                            stepSize: 0.001
+                            property bool updatingFromInput: false
+                            // Инициализация: конвертируем линейное значение в позицию бегунка
+                            Component.onCompleted: {
+                                if (controller) {
+                                    var linearValue = controller.segmentNoiseThreshold
+                                    var dB = 20 * Math.log10(linearValue)
+                                    var sliderPos = (dB + 80) / 80
+                                    value = Math.max(0.0, Math.min(1.0, sliderPos))
+                                } else {
+                                    value = 0.75  // Примерно -20 дБ
+                                }
+                            }
+                            onValueChanged: {
+                                if (updatingFromInput)
+                                    return
+                                // Конвертируем позицию бегунка (0.0-1.0) в дБ (-80 до 0), затем в линейное значение
+                                var dB = -80 + (value * 80)
+                                var linearValue = Math.pow(10, dB / 20)
+                                console.log("SegmentNoise Slider changed: slider position =", value, "dB =", dB, "linear value =", linearValue)
+                                segmentNoiseControls.updateSegmentNoise(linearValue, { skipSlider: true })
+                            }
+                        }
+                        
+                        Label {
+                            text: qsTr("max")
+                            Layout.preferredWidth: 30
+                            color: "#c41e3a"
+                            font.pixelSize: 12
                         }
                     }
 
@@ -249,6 +497,7 @@ ApplicationWindow {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                Layout.minimumHeight: 520
                 gradient: Gradient {
                     GradientStop { position: 0.0; color: Theme.Theme.colors.accentLight }
                     GradientStop { position: 1.0; color: Qt.lighter(Theme.Theme.colors.accentLight, 1.1) }
@@ -383,6 +632,8 @@ ApplicationWindow {
                         reversePlaying: controller ? controller.isSegmentReversePlaying(model.segmentIndex) : false
                         enabled: controller ? controller.interactionsEnabled : false
                         originalPlaybackEnabled: controller ? controller.originalPlaybackEnabled : false
+                        segmentIndex: model.segmentIndex
+                        segmentController: controller
 
                         onRecordTriggered: controller ? controller.toggleSegmentRecording(model.segmentIndex) : null
                         onOriginalPlayTriggered: controller ? controller.toggleSegmentOriginalPlayback(model.segmentIndex) : null
@@ -410,12 +661,6 @@ ApplicationWindow {
                 secondary: true
                 enabled: controller ? controller.canPlayGlue : false
                 onClicked: controller ? controller.toggleGluePlayback() : null
-            }
-            PrimaryButton {
-                Layout.preferredWidth: 200
-                text: qsTr("Перевернуть песню")
-                enabled: controller ? controller.canReverseSong : false
-                onClicked: controller ? controller.reverseSong() : null
             }
             PrimaryButton {
                 Layout.preferredWidth: 200
@@ -765,5 +1010,381 @@ ApplicationWindow {
             }
         }
     }
+    
+    // Диалоговое окно настроек
+    Item {
+        id: settingsDialog
+        anchors.fill: parent
+        visible: false
+        z: 10001 // Above recording dialog
+        
+        // Данные для waveform (обновляются при изменении порога или загрузке аудио)
+        property var waveformVolumeData: []
+        property var waveformSegments: []
+        property var editedBoundaries: []  // Временные границы, редактируемые пользователем
+        
+        // Обновить данные waveform при открытии диалога или изменении порога
+        onVisibleChanged: {
+            if (visible && controller && controller.projectReady) {
+                updateWaveformData()
+                // Инициализировать editedBoundaries текущими границами
+                editedBoundaries = []
+                var segData = controller.getSegmentDataForWaveform()
+                for (var i = 0; i < segData.length; i++) {
+                    editedBoundaries.push(segData[i].startMs)
+                }
+                // Добавить конечную границу
+                if (segData.length > 0) {
+                    var lastSeg = segData[segData.length - 1]
+                    if (lastSeg.endMs) {
+                        editedBoundaries.push(lastSeg.endMs)
+                    }
+                }
+            } else if (!visible) {
+                // При закрытии применяем изменения
+                applyBoundaryChanges()
+            }
+        }
+        
+        function applyBoundaryChanges() {
+            if (!controller || !controller.projectReady) return
+            
+            // Собрать все границы из editableSegments waveformView
+            var boundaries = []
+            if (waveformView.editableSegments && waveformView.editableSegments.length > 0) {
+                for (var i = 0; i < waveformView.editableSegments.length; i++) {
+                    boundaries.push(waveformView.editableSegments[i].startMs)
+                }
+                // Добавить конечную границу
+                var lastSeg = waveformView.editableSegments[waveformView.editableSegments.length - 1]
+                if (lastSeg.endMs) {
+                    boundaries.push(lastSeg.endMs)
+                }
+            } else {
+                // Если не было редактирования, использовать текущие границы
+                boundaries = editedBoundaries
+            }
+            
+            if (boundaries.length > 0) {
+                controller.recreateSegmentsFromBoundaries(boundaries)
+            }
+        }
+        
+        function updateWaveformData() {
+            if (!controller || !controller.projectReady) {
+                settingsDialog.waveformVolumeData = []
+                settingsDialog.waveformSegments = []
+                waveformView._segmentsVersion++
+                return
+            }
+            
+            // Получить данные анализа громкости
+            var volumeAnalysis = controller.analyzeVolume(50, originalNoiseSlider.value, 0.7)
+            settingsDialog.waveformVolumeData = volumeAnalysis
+            
+            // Получить данные отрезков
+            var segData = controller.getSegmentDataForWaveform()
+            settingsDialog.waveformSegments = segData
+            waveformView._segmentsVersion++
+            
+            // Обновить editedBoundaries при обновлении данных
+            if (settingsDialog.visible) {
+                editedBoundaries = []
+                for (var i = 0; i < segData.length; i++) {
+                    editedBoundaries.push(segData[i].startMs)
+                }
+                // Добавить конечную границу
+                if (segData.length > 0) {
+                    var lastSeg = segData[segData.length - 1]
+                    if (lastSeg.endMs) {
+                        editedBoundaries.push(lastSeg.endMs)
+                    }
+                }
+            }
+        }
+        
+        // Semi-transparent black overlay
+        Rectangle {
+            anchors.fill: parent
+            color: "#80000000"
+        }
+        
+        // Block all mouse interactions with background
+        MouseArea {
+            anchors.fill: parent
+            enabled: settingsDialog.visible
+            onClicked: {
+                // Close dialog when clicking on overlay
+                settingsDialog.visible = false
+            }
+        }
+        
+        Rectangle {
+            id: settingsDialogContent
+            anchors.centerIn: parent
+            width: 700
+            height: 600
+            color: Theme.Theme.colors.sectionBackground
+            radius: Theme.Theme.cornerRadius
+            
+            layer.enabled: true
+            layer.effect: DropShadow {
+                color: "#40000000"
+                radius: 20
+                samples: 32
+                verticalOffset: 4
+            }
+            
+            // Prevent clicks inside dialog from closing it
+            MouseArea {
+                anchors.fill: parent
+                onClicked: {
+                    // Do nothing - just block clicks from reaching overlay
+                }
+            }
+            
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 24
+                spacing: 20
+                
+                // Waveform визуализация (показывается только если есть загруженное/записанное аудио)
+                WaveformView {
+                    id: waveformView
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 200
+                    visible: controller && controller.projectReady
+                    volumeData: settingsDialog.waveformVolumeData
+                    noiseThreshold: originalNoiseSlider.value
+                    showSegments: true
+                    segments: settingsDialog.waveformSegments
+                    interactive: true
+                    
+                    // Обработка изменений границ
+                    onSegmentBoundaryChanged: {
+                        // Границы обновляются в реальном времени в editableSegments
+                        // Применение произойдет при закрытии диалога
+                    }
+                }
+                
+                // Регулятор для оригинала
+                ColumnLayout {
+                    id: originalNoiseControls
+                    Layout.fillWidth: true
+                    spacing: 8
+                    
+                    function updateOriginalNoise(value, options) {
+                        var clamped = Math.max(0.0001, Math.min(1.0, value || 0.0))
+                        if (!(options && options.skipController) && controller) {
+                            if (controller.originalNoiseThreshold !== clamped) {
+                                controller.originalNoiseThreshold = clamped
+                            }
+                        }
+                        var dB = 20 * Math.log10(clamped)
+                        // Конвертируем дБ в линейную позицию бегунка (от 0.0 до 1.0)
+                        // dB от -80 до 0, slider от 0.0 до 1.0
+                        var sliderValue = (dB + 80) / 80
+                        if (!(options && options.skipSlider)) {
+                            originalNoiseSlider.updatingFromInput = true
+                            originalNoiseSlider.value = Math.max(0.0, Math.min(1.0, sliderValue))
+                            originalNoiseSlider.updatingFromInput = false
+                        }
+                        if (!(options && options.skipSpinBox)) {
+                            originalNoiseDbInput.updatingFromSlider = true
+                            originalNoiseDbInput.value = Math.round(dB)  // Конвертируем в целое число дБ
+                            originalNoiseDbInput.updatingFromSlider = false
+                        }
+                        if (settingsDialog.visible && !(options && options.skipWaveformUpdate)) {
+                            settingsDialog.updateWaveformData()
+                        }
+                    }
+                    
+                    // Строка с меткой и SpinBox
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 12
+                        
+                        Label {
+                            text: qsTr("Шум оригинал")
+                            color: "#c41e3a"
+                            font.pixelSize: 16
+                            font.bold: true
+                            Layout.alignment: Qt.AlignVCenter
+                        }
+                        
+                        // SpinBox для ввода в ДБ
+                        SpinBox {
+                            id: originalNoiseDbInput
+                            Layout.preferredWidth: 120
+                            from: -80
+                            to: 0
+                            stepSize: 1
+                            editable: true
+                            property bool updatingFromSlider: false
+                            
+                            // Уменьшаем размер кнопок +/-
+                            up.indicator.implicitWidth: 20
+                            down.indicator.implicitWidth: 20
+                            
+                            // Отображать значение в дБ (value хранится напрямую, например -20 для -20 дБ)
+                            property real dBValue: value
+                            
+                            // Функция конвертации ДБ в значение
+                            function dBToValue(dB) {
+                                return Math.pow(10, dB / 20)
+                            }
+                            
+                            // Функция для форматирования значения в текст
+                            function formatValue(val) {
+                                return val.toString()
+                            }
+                            
+                            // Функция для парсинга текста в значение
+                            function parseValue(text) {
+                                var dB = parseInt(text)
+                                if (isNaN(dB)) return -20
+                                dB = Math.max(-80, Math.min(0, dB))
+                                return dB
+                            }
+                            
+                            // Кастомный contentItem для отображения значения в дБ
+                            contentItem: TextInput {
+                                text: originalNoiseDbInput.formatValue(originalNoiseDbInput.value)
+                                font: originalNoiseDbInput.font
+                                color: originalNoiseDbInput.palette.text
+                                selectionColor: originalNoiseDbInput.palette.highlight
+                                selectedTextColor: originalNoiseDbInput.palette.highlightedText
+                                horizontalAlignment: Qt.AlignHCenter
+                                verticalAlignment: Qt.AlignVCenter
+                                readOnly: !originalNoiseDbInput.editable
+                                validator: IntValidator {
+                                    bottom: -80
+                                    top: 0
+                                }
+                                inputMethodHints: Qt.ImhFormattedNumbersOnly
+                                
+                                onEditingFinished: {
+                                    if (!originalNoiseDbInput.updatingFromSlider) {
+                                        var newValue = originalNoiseDbInput.parseValue(text)
+                                        if (newValue !== originalNoiseDbInput.value) {
+                                            originalNoiseDbInput.value = newValue
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Инициализация значения
+                            Component.onCompleted: {
+                                if (controller) {
+                                    originalNoiseControls.updateOriginalNoise(controller.originalNoiseThreshold, { skipController: true })
+                                } else {
+                                    value = -20  // -20 дБ
+                                }
+                            }
+                            
+                            // Обновление при изменении контроллера
+                            Connections {
+                                target: controller
+                                function onVolumeSettingsChanged() {
+                                    if (controller) {
+                                        originalNoiseControls.updateOriginalNoise(controller.originalNoiseThreshold, { skipController: true })
+                                    }
+                                }
+                            }
+                            
+                            onValueChanged: {
+                                if (updatingFromSlider)
+                                    return
+                                var dB = dBValue
+                                var linearValue = dBToValue(dB)
+                                var clampedValue = Math.max(0.0001, Math.min(1.0, linearValue))
+                                // Конвертируем dB в позицию бегунка (0.0-1.0 соответствует -80 до 0 dB)
+                                var sliderPos = (dB + 80) / 80
+                                console.log("OriginalNoise SpinBox changed: dB =", dB, "linear value =", clampedValue, "slider position =", sliderPos)
+                                originalNoiseSlider.updatingFromInput = true
+                                originalNoiseSlider.value = Math.max(0.0, Math.min(1.0, sliderPos))
+                                originalNoiseSlider.updatingFromInput = false
+                                originalNoiseControls.updateOriginalNoise(clampedValue, { skipSpinBox: true })
+                                // Обновляем waveform напрямую для высокой чувствительности
+                                if (settingsDialog.visible && controller && controller.projectReady) {
+                                    settingsDialog.updateWaveformData()
+                                }
+                            }
+                        }
+                        
+                        Label {
+                            text: qsTr("dB")
+                            color: "#c41e3a"
+                            font.pixelSize: 16
+                            Layout.alignment: Qt.AlignVCenter
+                        }
+                    }
+                    
+                    // Бегунок без рамки (работает линейно по дБ от -80 до 0)
+                    Slider {
+                        id: originalNoiseSlider
+                        Layout.fillWidth: true
+                        from: 0.0
+                        to: 1.0
+                        stepSize: 0.001
+                        property bool updatingFromInput: false
+                        // Инициализация: конвертируем линейное значение в позицию бегунка
+                        Component.onCompleted: {
+                            if (controller) {
+                                var linearValue = controller.originalNoiseThreshold
+                                var dB = 20 * Math.log10(linearValue)
+                                var sliderPos = (dB + 80) / 80
+                                value = Math.max(0.0, Math.min(1.0, sliderPos))
+                            } else {
+                                value = 0.75  // Примерно -20 дБ
+                            }
+                        }
+                        onValueChanged: {
+                            if (updatingFromInput)
+                                return
+                            // Конвертируем позицию бегунка (0.0-1.0) в дБ (-80 до 0), затем в линейное значение
+                            var dB = -80 + (value * 80)
+                            var linearValue = Math.pow(10, dB / 20)
+                            console.log("OriginalNoise Slider changed: slider position =", value, "dB =", dB, "linear value =", linearValue)
+                            originalNoiseControls.updateOriginalNoise(linearValue, { skipSlider: true })
+                            // Обновляем waveform напрямую для высокой чувствительности
+                            if (settingsDialog.visible && controller && controller.projectReady) {
+                                settingsDialog.updateWaveformData()
+                            }
+                        }
+                    }
+                }
+                
+                Item { Layout.fillHeight: true }
+                
+                // Кнопка закрытия
+                PrimaryButton {
+                    Layout.fillWidth: true
+                    text: qsTr("Закрыть")
+                    onClicked: settingsDialog.visible = false
+                }
+            }
+        }
+        
+        // Заголовок диалога
+        Rectangle {
+            anchors.left: settingsDialogContent.left
+            anchors.right: settingsDialogContent.right
+            anchors.bottom: settingsDialogContent.top
+            anchors.bottomMargin: -16
+            height: 40
+            color: Theme.Theme.colors.sectionBackground
+            radius: Theme.Theme.cornerRadius
+            border.color: Theme.Theme.colors.shadowColor
+            border.width: 1
+            
+            Label {
+                anchors.centerIn: parent
+                text: qsTr("Настройки")
+                font.pixelSize: 18
+                font.bold: true
+                color: "#c41e3a"
+            }
+        }
+    }
 }
-

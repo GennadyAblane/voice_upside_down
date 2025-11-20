@@ -17,6 +17,11 @@ struct SegmentInfo
     QString reversePath;
 
     qint64 durationMs = 0;
+    
+    // Manual trim boundaries for recorded segment (in milliseconds relative to recording start)
+    // -1 means not set (use automatic trimming)
+    double trimStartMs = -1.0;
+    double trimEndMs = -1.0;
 
     QString title() const;
 };

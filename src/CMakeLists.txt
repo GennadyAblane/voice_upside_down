@@ -16,6 +16,8 @@ set(SOURCES
     audio/segmentmodel.h
     audio/wavutils.cpp
     audio/wavutils.h
+    audio/volumeanalyzer.cpp
+    audio/volumeanalyzer.h
     persistence/projectserializer.cpp
     persistence/projectserializer.h
     utils/pathutils.cpp

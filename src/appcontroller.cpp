@@ -6,6 +6,7 @@
 #include "audio/audiobuffer.h"
 #include "audio/recordingengine.h"
 #include "audio/segmentmodel.h"
+#include "audio/volumeanalyzer.h"
 #include "audio/wavutils.h"
 #include "persistence/projectserializer.h"
 #include "utils/logger.h"
@@ -15,6 +16,7 @@
 #include <QFile>
 #include <QDir>
 #include <QUrl>
+#include <QtGlobal>
 
 AppController::AppController(QObject *parent)
     : QObject(parent)
@@ -48,6 +50,9 @@ AppController::AppController(QObject *parent)
         LOG_WARN() << "Playback error:" << error;
         // Note: QMessageBox cannot be used in QML application (QGuiApplication), only logging
     });
+    
+    // Connect playback position updates
+    connect(m_playback, &AudioPlaybackEngine::playbackPositionChanged, this, &AppController::playbackPositionChanged);
 
     // Connect recording engine signals
     connect(m_recorder, &RecordingEngine::recordingReady, this, [this]() {
@@ -151,12 +156,14 @@ bool AppController::gluePlaybackActive() const
 
 bool AppController::canReverseSong() const
 {
-    return hasAllSegmentsRecorded();
+    // Reverse song button is no longer needed - reverse is created automatically during glue
+    return false;
 }
 
 bool AppController::canPlayReverse() const
 {
-    return hasAllSegmentsRecorded();
+    // Reverse is created automatically during glue, so check if it exists
+    return !m_reversedSongPath.isEmpty() && QFileInfo::exists(m_reversedSongPath);
 }
 
 bool AppController::reversePlaybackActive() const
@@ -212,6 +219,53 @@ void AppController::setOriginalPlaybackEnabled(bool enabled)
     
     m_originalPlaybackEnabled = enabled;
     emit originalPlaybackEnabledChanged();
+}
+
+double AppController::originalNoiseThreshold() const
+{
+    return m_originalNoiseThreshold;
+}
+
+void AppController::setOriginalNoiseThreshold(double threshold)
+{
+    threshold = qBound(0.0, threshold, 1.0);
+    if (qAbs(m_originalNoiseThreshold - threshold) < 0.001)
+        return;
+    
+    m_originalNoiseThreshold = threshold;
+    emit volumeSettingsChanged();
+}
+
+double AppController::segmentNoiseThreshold() const
+{
+    return m_segmentNoiseThreshold;
+}
+
+void AppController::setSegmentNoiseThreshold(double threshold)
+{
+    threshold = qBound(0.0, threshold, 1.0);
+    // Убираем проверку на минимальное изменение, чтобы сигнал эмитился всегда
+    // Это необходимо для обновления waveform при каждом изменении порога
+    if (qAbs(m_segmentNoiseThreshold - threshold) < 0.000000000000000001)
+        return;
+    
+    m_segmentNoiseThreshold = threshold;
+    emit volumeSettingsChanged();
+}
+
+double AppController::playbackPositionMs() const
+{
+    return m_playback->playbackPositionMs();
+}
+
+int AppController::activePlaybackSegmentIndex() const
+{
+    return m_activePlaybackSegmentIndex;
+}
+
+bool AppController::isPlayingOriginalSegment() const
+{
+    return m_isPlayingOriginalSegment;
 }
 
 void AppController::loadAudioSource(const QString &filePath)
@@ -729,11 +783,143 @@ void AppController::toggleSegmentRecording(int segmentIndex)
     LOG_INFO() << "Segment recording initialization started for index" << segmentIndex << "to" << segment->recordingPath << "recordingReady:" << m_recordingReady;
 }
 
+// Helper function to trim noise from segment start and end
+// If trimStartMs and trimEndMs are >= 0, they are used instead of automatic detection
+static QByteArray trimSegmentNoise(const QByteArray &pcm, const QAudioFormat &format, double noiseThreshold, double trimStartMs = -1.0, double trimEndMs = -1.0)
+{
+    if (pcm.isEmpty() || !format.isValid()) {
+        return pcm;
+    }
+    
+    // Create AudioBuffer from PCM data
+    AudioBuffer buffer;
+    buffer.setFormat(format);
+    buffer.data() = pcm;
+    
+    if (buffer.frameCount() == 0) {
+        return pcm;
+    }
+    
+    // Analyze volume with 100ms windows
+    const QVector<VolumeLevel> levels = VolumeAnalyzer::analyzeVolume(
+        buffer, 100, noiseThreshold, 0.7);
+    
+    if (levels.isEmpty()) {
+        return pcm;
+    }
+    
+    const qint64 sampleRate = format.sampleRate();
+    if (sampleRate <= 0) {
+        return pcm;
+    }
+    
+    qint64 startFrame = 0;
+    qint64 endFrame = buffer.frameCount();
+    
+    // Use manual trim boundaries if provided
+    if (trimStartMs >= 0 && trimEndMs >= 0 && trimStartMs < trimEndMs) {
+        startFrame = static_cast<qint64>((trimStartMs * sampleRate) / 1000.0);
+        endFrame = static_cast<qint64>((trimEndMs * sampleRate) / 1000.0);
+        startFrame = qBound(0LL, startFrame, buffer.frameCount());
+        endFrame = qBound(0LL, endFrame, buffer.frameCount());
+        LOG_INFO() << "Using manual trim boundaries: startMs:" << trimStartMs << "endMs:" << trimEndMs 
+                   << "startFrame:" << startFrame << "endFrame:" << endFrame;
+    } else {
+        // Automatic detection
+        LOG_INFO() << "Trimming segment: total levels:" << levels.size() 
+                   << "noiseThreshold:" << noiseThreshold
+                   << "totalFrames:" << buffer.frameCount();
+        
+        // Log first few and last few levels for debugging
+        for (int i = 0; i < qMin(5, levels.size()); ++i) {
+            const VolumeLevel &level = levels[i];
+            LOG_INFO() << "Level" << i << "startFrame:" << level.startFrame 
+                       << "frameCount:" << level.frameCount 
+                       << "rms:" << level.rmsLevel 
+                       << "isQuiet:" << level.isQuiet 
+                       << "isLoud:" << level.isLoud;
+        }
+        if (levels.size() > 5) {
+            for (int i = qMax(5, levels.size() - 5); i < levels.size(); ++i) {
+                const VolumeLevel &level = levels[i];
+                LOG_INFO() << "Level" << i << "startFrame:" << level.startFrame 
+                           << "frameCount:" << level.frameCount 
+                           << "rms:" << level.rmsLevel 
+                           << "isQuiet:" << level.isQuiet 
+                           << "isLoud:" << level.isLoud;
+            }
+        }
+        
+        // Find start of real sound
+        // Logic: find first loud section (any length), trim everything before it
+        // (all quiet sections, regardless of their length - 1ms or 10000ms, doesn't matter)
+        for (int i = 0; i < levels.size(); ++i) {
+            const VolumeLevel &level = levels[i];
+            if (!level.isQuiet) {
+                // Found first loud section (any length) - this is the real start
+                // Trim everything before it (all quiet sections, regardless of length)
+                startFrame = level.startFrame;
+                LOG_INFO() << "Found start at frame" << startFrame << "from loud section" << i 
+                           << "frames:" << level.frameCount << "rms:" << level.rmsLevel;
+                break;
+            }
+            // Quiet section - continue searching, will be trimmed regardless of length
+        }
+        
+        // Find end of real sound
+        // Logic: find last loud section (any length), trim everything after it
+        // (all quiet sections, regardless of their length - 1ms or 10000ms, doesn't matter)
+        for (int i = levels.size() - 1; i >= 0; --i) {
+            const VolumeLevel &level = levels[i];
+            if (!level.isQuiet) {
+                // Found last loud section (any length) - this is the real end
+                // Trim everything after it (all quiet sections, regardless of length)
+                endFrame = level.startFrame + level.frameCount;
+                LOG_INFO() << "Found end at frame" << endFrame << "from loud section" << i 
+                           << "frames:" << level.frameCount << "rms:" << level.rmsLevel;
+                break;
+            }
+            // Quiet section - continue searching backwards, will be trimmed regardless of length
+        }
+    }
+    
+    // Ensure start and end don't overlap
+    if (startFrame >= endFrame) {
+        // Overlap detected - adjust to prevent it
+        if (startFrame > 0 && endFrame < buffer.frameCount()) {
+            // Both were found, but they overlap - use middle point
+            qint64 middleFrame = (startFrame + endFrame) / 2;
+            startFrame = qMin(startFrame, middleFrame);
+            endFrame = qMax(endFrame, middleFrame + 1);
+            LOG_WARN() << "Start and end overlapped, adjusted to startFrame:" << startFrame 
+                       << "endFrame:" << endFrame;
+        } else {
+            // No valid sound found, return empty
+            LOG_WARN() << "No valid sound found in segment after trimming, startFrame:" 
+                       << startFrame << "endFrame:" << endFrame;
+            return QByteArray();
+        }
+    }
+    
+    const qint64 trimmedFrameCount = endFrame - startFrame;
+    QByteArray trimmed = buffer.sliceFrames(startFrame, trimmedFrameCount);
+    
+    LOG_INFO() << "Trimmed segment: original frames:" << buffer.frameCount() 
+               << "trimmed frames:" << trimmedFrameCount 
+               << "removed from start:" << startFrame << "frames"
+               << "removed from end:" << (buffer.frameCount() - endFrame) << "frames";
+    
+    return trimmed;
+}
+
 void AppController::toggleSegmentOriginalPlayback(int segmentIndex)
 {
     if (m_activeOriginalPlayback.contains(segmentIndex)) {
         m_playback->stopAll();
         m_activeOriginalPlayback.remove(segmentIndex);
+        m_activePlaybackSegmentIndex = -1;
+        m_isPlayingOriginalSegment = false;
+        emit playbackPositionChanged();
         setStatusMessage(tr("Оригинал сегмента %1 остановлен").arg(segmentIndex));
         LOG_INFO() << "Stopped original playback for segment" << segmentIndex;
         emit m_project.segmentsUpdated();
@@ -765,6 +951,9 @@ void AppController::toggleSegmentOriginalPlayback(int segmentIndex)
 
     if (m_playback->playBuffer(segmentData, m_project.originalBuffer().format())) {
         m_activeOriginalPlayback.insert(segmentIndex);
+        m_activePlaybackSegmentIndex = segmentIndex;
+        m_isPlayingOriginalSegment = true;
+        emit playbackPositionChanged();
         setStatusMessage(tr("Воспроизведение оригинала сегмента %1").arg(segmentIndex));
         LOG_INFO() << "Started original playback for segment" << segmentIndex;
         emit m_project.segmentsUpdated();
@@ -779,6 +968,9 @@ void AppController::toggleSegmentRecordedPlayback(int segmentIndex)
     if (m_activeRecordedPlayback.contains(segmentIndex)) {
         m_playback->stopAll();
         m_activeRecordedPlayback.remove(segmentIndex);
+        m_activePlaybackSegmentIndex = -1;
+        m_isPlayingOriginalSegment = false;
+        emit playbackPositionChanged();
         setStatusMessage(tr("Запись сегмента %1 остановлена").arg(segmentIndex));
         LOG_INFO() << "Stopped recorded playback for segment" << segmentIndex;
         emit m_project.segmentsUpdated();
@@ -807,10 +999,35 @@ void AppController::toggleSegmentRecordedPlayback(int segmentIndex)
         return;
     }
 
-    if (m_playback->playFile(segment->recordingPath)) {
+    // Load and trim the recording (same as in glueSegments)
+    QByteArray pcm;
+    QAudioFormat format;
+    QString error;
+    if (!WavUtils::readWavFile(segment->recordingPath, pcm, format, &error)) {
+        setStatusMessage(tr("Ошибка чтения записи сегмента %1: %2").arg(segmentIndex).arg(error));
+        LOG_WARN() << "Failed to read segment recording:" << segment->recordingPath << error;
+        return;
+    }
+
+    // Trim noise from start and end (use manual boundaries if set)
+    double trimStartMs = segment->trimStartMs;
+    double trimEndMs = segment->trimEndMs;
+    QByteArray trimmedPcm = trimSegmentNoise(pcm, format, m_segmentNoiseThreshold, trimStartMs, trimEndMs);
+    if (trimmedPcm.isEmpty()) {
+        setStatusMessage(tr("Ошибка: сегмент %1 не содержит звука после обрезки").arg(segmentIndex));
+        LOG_WARN() << "Segment" << segmentIndex << "is empty after trimming";
+        return;
+    }
+
+    // Play the trimmed audio
+    if (m_playback->playBuffer(trimmedPcm, format)) {
         m_activeRecordedPlayback.insert(segmentIndex);
-        setStatusMessage(tr("Воспроизведение записи сегмента %1").arg(segmentIndex));
-        LOG_INFO() << "Started recorded playback for segment" << segmentIndex;
+        m_activePlaybackSegmentIndex = segmentIndex;
+        m_isPlayingOriginalSegment = false;
+        emit playbackPositionChanged();
+        setStatusMessage(tr("Воспроизведение записи сегмента %1 (обрезано)").arg(segmentIndex));
+        LOG_INFO() << "Started recorded playback for segment" << segmentIndex 
+                   << "original size:" << pcm.size() << "trimmed size:" << trimmedPcm.size();
         emit m_project.segmentsUpdated();
     } else {
         setStatusMessage(tr("Ошибка воспроизведения записи сегмента %1").arg(segmentIndex));
@@ -980,7 +1197,7 @@ void AppController::glueSegments()
         return;
     }
 
-    // Read all recorded segments
+    // Read all recorded segments and trim noise
     // Segments are stored in reverse order (from end to start of song):
     // segment 1 = end of song, segment 2, segment 3, segment 4 = start of song
     // We glue them in display order (1 → 2 → 3 → 4) so that after reversing
@@ -1020,11 +1237,23 @@ void AppController::glueSegments()
             }
         }
 
-        gluedPcm.append(pcm);
-        LOG_INFO() << "Added segment" << segment.displayIndex << "to glued song, size" << pcm.size();
+        // Trim noise from start and end (use manual boundaries if set)
+        double trimStartMs = segment.trimStartMs;
+        double trimEndMs = segment.trimEndMs;
+        QByteArray trimmedPcm = trimSegmentNoise(pcm, segFormat, m_segmentNoiseThreshold, trimStartMs, trimEndMs);
+        if (trimmedPcm.isEmpty()) {
+            setStatusMessage(tr("Ошибка: сегмент %1 не содержит звука после обрезки").arg(segment.displayIndex));
+            LOG_WARN() << "Segment" << segment.displayIndex << "is empty after trimming";
+            return;
+        }
+
+        gluedPcm.append(trimmedPcm);
+        LOG_INFO() << "Added trimmed segment" << segment.displayIndex 
+                   << "to glued song, original size:" << pcm.size() 
+                   << "trimmed size:" << trimmedPcm.size();
     }
 
-    // Save glued song
+    // Save glued song (normal order)
     const QString resultsDir = PathUtils::defaultResultsRoot();
     PathUtils::ensureDirectory(resultsDir);
     const QString songPath = PathUtils::composeSongFile(resultsDir, m_project.projectName());
@@ -1037,8 +1266,83 @@ void AppController::glueSegments()
     }
 
     m_project.setDecodedFilePath(songPath);
-    setStatusMessage(tr("Сегменты склеены: %1").arg(songPath));
-    LOG_INFO() << "Segments glued successfully to" << songPath;
+    LOG_INFO() << "Normal glued song saved to" << songPath;
+    
+    // Create reversed song: reverse each segment individually, then glue in reverse order
+    // Segments in array: [end of song (displayIndex 1), ..., start of song (displayIndex N)]
+    // For reverse: iterate backwards through array, reverse each segment, then glue
+    QByteArray reversedPcm;
+    bool reversedFormatSet = false;
+    
+    // Iterate in reverse order (from start of song to end of song)
+    for (int i = segments.size() - 1; i >= 0; --i) {
+        const auto &segment = segments[i];
+        if (segment.recordingPath.isEmpty() || !QFileInfo::exists(segment.recordingPath)) {
+            setStatusMessage(tr("Файл записи сегмента %1 не найден").arg(segment.displayIndex));
+            LOG_WARN() << "Recording file not found for segment" << segment.displayIndex;
+            return;
+        }
+
+        QByteArray pcm;
+        QAudioFormat segFormat;
+        if (!WavUtils::readWavFile(segment.recordingPath, pcm, segFormat, &error)) {
+            setStatusMessage(tr("Ошибка чтения сегмента %1: %2").arg(segment.displayIndex).arg(error));
+            LOG_WARN() << "Failed to read segment" << segment.displayIndex << error;
+            return;
+        }
+
+        if (!reversedFormatSet) {
+            format = segFormat;
+            reversedFormatSet = true;
+        } else {
+            // Ensure format matches
+            if (format.sampleRate() != segFormat.sampleRate() ||
+                format.channelCount() != segFormat.channelCount() ||
+                format.sampleSize() != segFormat.sampleSize()) {
+                setStatusMessage(tr("Несовместимые форматы сегментов"));
+                LOG_WARN() << "Incompatible segment formats";
+                return;
+            }
+        }
+
+        // Trim noise from start and end (use manual boundaries if set)
+        double trimStartMs = segment.trimStartMs;
+        double trimEndMs = segment.trimEndMs;
+        QByteArray trimmedPcm = trimSegmentNoise(pcm, segFormat, m_segmentNoiseThreshold, trimStartMs, trimEndMs);
+        if (trimmedPcm.isEmpty()) {
+            setStatusMessage(tr("Ошибка: сегмент %1 не содержит звука после обрезки").arg(segment.displayIndex));
+            LOG_WARN() << "Segment" << segment.displayIndex << "is empty after trimming";
+            return;
+        }
+
+        // Reverse the trimmed segment
+        QByteArray reversedSegment = AudioBuffer::reverseSamples(trimmedPcm, segFormat);
+        if (reversedSegment.isEmpty()) {
+            setStatusMessage(tr("Ошибка: не удалось перевернуть сегмент %1").arg(segment.displayIndex));
+            LOG_WARN() << "Failed to reverse segment" << segment.displayIndex;
+            return;
+        }
+
+        reversedPcm.append(reversedSegment);
+        LOG_INFO() << "Added reversed segment" << segment.displayIndex 
+                   << "to reversed song, original size:" << pcm.size() 
+                   << "trimmed size:" << trimmedPcm.size()
+                   << "reversed size:" << reversedSegment.size();
+    }
+
+    // Save reversed song
+    const QString reversePath = PathUtils::composeReverseSongFile(resultsDir, m_project.projectName());
+    if (!WavUtils::writeWavFile(reversePath, format, reversedPcm, &error)) {
+        setStatusMessage(tr("Ошибка сохранения реверса: %1").arg(error));
+        LOG_WARN() << "Failed to write reversed song:" << error;
+        return;
+    }
+
+    m_reversedSongPath = reversePath;
+    setStatusMessage(tr("Сегменты склеены: %1, реверс: %2").arg(songPath).arg(reversePath));
+    LOG_INFO() << "Segments glued successfully. Normal:" << songPath << "Reversed:" << reversePath;
+    emit saveStateChanged(); // Update save button state
+    emit reverseStateChanged(); // Update reverse playback button state
 }
 
 void AppController::toggleGluePlayback()
@@ -1078,46 +1382,7 @@ void AppController::toggleGluePlayback()
     }
 }
 
-void AppController::reverseSong()
-{
-    if (m_project.decodedFilePath().isEmpty() || !QFileInfo::exists(m_project.decodedFilePath())) {
-        setStatusMessage(tr("Сначала склейте сегменты"));
-        LOG_WARN() << "Cannot reverse: glued song not found";
-        return;
-    }
-
-    setStatusMessage(tr("Реверсирование песни..."));
-    LOG_INFO() << "Reverse song requested";
-
-    // Read glued song
-    QByteArray pcm;
-    QAudioFormat format;
-    QString error;
-    if (!WavUtils::readWavFile(m_project.decodedFilePath(), pcm, format, &error)) {
-        setStatusMessage(tr("Ошибка чтения склеенной песни: %1").arg(error));
-        LOG_WARN() << "Failed to read glued song:" << error;
-        return;
-    }
-
-    // Reverse
-    QByteArray reversed = AudioBuffer::reverseSamples(pcm, format);
-
-    // Save reversed song
-    const QString resultsDir = PathUtils::defaultResultsRoot();
-    PathUtils::ensureDirectory(resultsDir);
-    const QString reversePath = PathUtils::composeReverseSongFile(resultsDir, m_project.projectName());
-
-    if (!WavUtils::writeWavFile(reversePath, format, reversed, &error)) {
-        setStatusMessage(tr("Ошибка сохранения реверса: %1").arg(error));
-        LOG_WARN() << "Failed to write reversed song:" << error;
-        return;
-    }
-
-    m_reversedSongPath = reversePath;
-    setStatusMessage(tr("Песня реверсирована: %1").arg(reversePath));
-    LOG_INFO() << "Song reversed successfully to" << reversePath;
-    emit saveStateChanged(); // Update save button state
-}
+// reverseSong() method removed - reverse is now created automatically during glueSegments()
 
 void AppController::toggleSongReversePlayback()
 {
@@ -1209,6 +1474,9 @@ void AppController::clearPlaybackStates()
     m_activeReversePlayback.clear();
     m_gluePlaybackActive = false;
     m_reversePlaybackActive = false;
+    m_activePlaybackSegmentIndex = -1;
+    m_isPlayingOriginalSegment = false;
+    emit playbackPositionChanged();
     refreshUiStates();
     // Emit segments update to refresh button states in QML
     emit m_project.segmentsUpdated();
@@ -1260,6 +1528,470 @@ const SegmentInfo *AppController::segmentByDisplayIndex(int displayIndex) const
             return &segment;
     }
     return nullptr;
+}
+
+QVariantList AppController::analyzeVolume(int windowSizeMs, double quietThreshold, double loudThreshold)
+{
+    QVariantList result;
+    
+    if (!m_projectReady) {
+        setStatusMessage(tr("Проект не загружен"));
+        LOG_WARN() << "analyzeVolume called but project not ready";
+        return result;
+    }
+    
+    const AudioBuffer &buffer = m_project.originalBuffer();
+    if (!buffer.format().isValid() || buffer.frameCount() == 0) {
+        setStatusMessage(tr("Аудио данные недоступны"));
+        LOG_WARN() << "analyzeVolume called but buffer is empty or invalid";
+        return result;
+    }
+    
+    setStatusMessage(tr("Анализ громкости..."));
+    LOG_INFO() << "Starting volume analysis, windowSizeMs:" << windowSizeMs 
+               << "quietThreshold:" << quietThreshold << "loudThreshold:" << loudThreshold;
+    
+    const QVector<VolumeLevel> levels = VolumeAnalyzer::analyzeVolume(
+        buffer, windowSizeMs, quietThreshold, loudThreshold);
+    
+    const QAudioFormat &format = buffer.format();
+    const qint64 sampleRate = format.sampleRate();
+    
+    // Convert to QVariantList for QML
+    for (const VolumeLevel &level : levels) {
+        QVariantMap levelMap;
+        const qint64 startMs = (level.startFrame * 1000) / sampleRate;
+        const qint64 endMs = ((level.startFrame + level.frameCount) * 1000) / sampleRate;
+        
+        levelMap["startMs"] = startMs;
+        levelMap["endMs"] = endMs;
+        levelMap["startFrame"] = level.startFrame;
+        levelMap["frameCount"] = level.frameCount;
+        levelMap["rmsLevel"] = level.rmsLevel;
+        levelMap["peakLevel"] = level.peakLevel;
+        levelMap["isQuiet"] = level.isQuiet;
+        levelMap["isLoud"] = level.isLoud;
+        
+        result.append(levelMap);
+    }
+    
+    // Count quiet and loud sections
+    int quietCount = 0;
+    int loudCount = 0;
+    for (const VolumeLevel &level : levels) {
+        if (level.isQuiet) quietCount++;
+        if (level.isLoud) loudCount++;
+    }
+    
+    setStatusMessage(tr("Анализ завершен: тихих участков: %1, громких: %2").arg(quietCount).arg(loudCount));
+    LOG_INFO() << "Volume analysis completed: quiet sections:" << quietCount << "loud sections:" << loudCount;
+    
+    return result;
+}
+
+QVariantList AppController::getSegmentDataForWaveform()
+{
+    QVariantList result;
+    
+    if (!m_projectReady) {
+        return result;
+    }
+    
+    const auto &segments = m_project.segments();
+    const QAudioFormat &format = m_project.originalBuffer().format();
+    const qint64 sampleRate = format.sampleRate();
+    
+    if (sampleRate <= 0) {
+        return result;
+    }
+    
+    for (const auto &segment : segments) {
+        QVariantMap segmentMap;
+        const qint64 startMs = (segment.startFrame * 1000) / sampleRate;
+        const qint64 endMs = ((segment.startFrame + segment.frameCount) * 1000) / sampleRate;
+        
+        segmentMap["startMs"] = startMs;
+        segmentMap["endMs"] = endMs;
+        segmentMap["index"] = segment.displayIndex;
+        
+        result.append(segmentMap);
+    }
+    
+    return result;
+}
+
+QVariantList AppController::analyzeSegmentRecording(int segmentIndex, int windowSizeMs)
+{
+    QVariantList result;
+    
+    if (!m_projectReady) {
+        return result;
+    }
+    
+    const SegmentInfo *segment = segmentByDisplayIndex(segmentIndex);
+    if (!segment || !segment->hasRecording || segment->recordingPath.isEmpty()) {
+        return result;
+    }
+    
+    if (!QFileInfo::exists(segment->recordingPath)) {
+        LOG_WARN() << "Segment recording file not found:" << segment->recordingPath;
+        return result;
+    }
+    
+    // Load the recording file
+    QByteArray pcmData;
+    QAudioFormat format;
+    QString error;
+    if (!WavUtils::readWavFile(segment->recordingPath, pcmData, format, &error)) {
+        LOG_WARN() << "Failed to read segment recording file:" << segment->recordingPath << "error:" << error;
+        return result;
+    }
+    
+    // Create AudioBuffer from loaded data
+    AudioBuffer buffer;
+    buffer.setFormat(format);
+    buffer.data() = pcmData;
+    
+    if (buffer.frameCount() == 0) {
+        LOG_WARN() << "Segment recording buffer is empty";
+        return result;
+    }
+    
+    // Analyze volume using segment noise threshold
+    const QVector<VolumeLevel> levels = VolumeAnalyzer::analyzeVolume(
+        buffer, windowSizeMs, m_segmentNoiseThreshold, 0.7);
+    
+    const qint64 sampleRate = format.sampleRate();
+    
+    // Convert to QVariantList for QML
+    for (const VolumeLevel &level : levels) {
+        QVariantMap levelMap;
+        const qint64 startMs = (level.startFrame * 1000) / sampleRate;
+        const qint64 endMs = ((level.startFrame + level.frameCount) * 1000) / sampleRate;
+        
+        levelMap["startMs"] = startMs;
+        levelMap["endMs"] = endMs;
+        levelMap["startFrame"] = level.startFrame;
+        levelMap["frameCount"] = level.frameCount;
+        levelMap["rmsLevel"] = level.rmsLevel;
+        levelMap["peakLevel"] = level.peakLevel;
+        levelMap["isQuiet"] = level.isQuiet;
+        levelMap["isLoud"] = level.isLoud;
+        
+        result.append(levelMap);
+    }
+    
+    return result;
+}
+
+double AppController::getSegmentStartMs(int segmentIndex)
+{
+    if (!m_projectReady) {
+        return 0.0;
+    }
+    
+    const SegmentInfo *segment = segmentByDisplayIndex(segmentIndex);
+    if (!segment) {
+        return 0.0;
+    }
+    
+    const QAudioFormat &format = m_project.originalBuffer().format();
+    const qint64 sampleRate = format.sampleRate();
+    
+    if (sampleRate <= 0) {
+        return 0.0;
+    }
+    
+    return (segment->startFrame * 1000.0) / sampleRate;
+}
+
+double AppController::getSegmentRecordingTrimmedStartMs(int segmentIndex)
+{
+    if (!m_projectReady) {
+        return 0.0;
+    }
+    
+    const SegmentInfo *segment = segmentByDisplayIndex(segmentIndex);
+    if (!segment || !segment->hasRecording || segment->recordingPath.isEmpty()) {
+        return 0.0;
+    }
+    
+    // If manual trim boundaries are set, use them
+    if (segment->trimStartMs >= 0) {
+        return segment->trimStartMs;
+    }
+    
+    if (!QFileInfo::exists(segment->recordingPath)) {
+        return 0.0;
+    }
+    
+    // Load the recording file
+    QByteArray pcm;
+    QAudioFormat format;
+    QString error;
+    if (!WavUtils::readWavFile(segment->recordingPath, pcm, format, &error)) {
+        LOG_WARN() << "Failed to read segment recording for trimmed start calculation:" << segment->recordingPath << error;
+        return 0.0;
+    }
+    
+    // Create AudioBuffer from loaded data
+    AudioBuffer buffer;
+    buffer.setFormat(format);
+    buffer.data() = pcm;
+    
+    if (buffer.frameCount() == 0) {
+        return 0.0;
+    }
+    
+    const qint64 sampleRate = format.sampleRate();
+    if (sampleRate <= 0) {
+        return 0.0;
+    }
+    
+    // Analyze volume to find where trimming starts
+    const QVector<VolumeLevel> levels = VolumeAnalyzer::analyzeVolume(
+        buffer, 100, m_segmentNoiseThreshold, 0.7);
+    
+    if (levels.isEmpty()) {
+        return 0.0;
+    }
+    
+    // Find start of real sound (first loud section)
+    qint64 startFrame = 0;
+    for (int i = 0; i < levels.size(); ++i) {
+        const VolumeLevel &level = levels[i];
+        if (!level.isQuiet) {
+            // Found first loud section - this is where trimming starts
+            startFrame = level.startFrame;
+            break;
+        }
+    }
+    
+    // Convert frames to milliseconds
+    return (startFrame * 1000.0) / sampleRate;
+}
+
+// Helper function to calculate trim boundaries for a segment recording
+static QPair<double, double> calculateTrimBoundaries(const QByteArray &pcm, const QAudioFormat &format, double noiseThreshold)
+{
+    QPair<double, double> result(-1.0, -1.0);
+    
+    if (pcm.isEmpty() || !format.isValid()) {
+        return result;
+    }
+    
+    AudioBuffer buffer;
+    buffer.setFormat(format);
+    buffer.data() = pcm;
+    
+    if (buffer.frameCount() == 0) {
+        return result;
+    }
+    
+    const qint64 sampleRate = format.sampleRate();
+    if (sampleRate <= 0) {
+        return result;
+    }
+    
+    const QVector<VolumeLevel> levels = VolumeAnalyzer::analyzeVolume(
+        buffer, 100, noiseThreshold, 0.7);
+    
+    if (levels.isEmpty()) {
+        return result;
+    }
+    
+    // Find start of real sound (first loud section)
+    qint64 startFrame = 0;
+    for (int i = 0; i < levels.size(); ++i) {
+        const VolumeLevel &level = levels[i];
+        if (!level.isQuiet) {
+            startFrame = level.startFrame;
+            break;
+        }
+    }
+    
+    // Find end of real sound (last loud section)
+    qint64 endFrame = buffer.frameCount();
+    for (int i = levels.size() - 1; i >= 0; --i) {
+        const VolumeLevel &level = levels[i];
+        if (!level.isQuiet) {
+            endFrame = level.startFrame + level.frameCount;
+            break;
+        }
+    }
+    
+    // Convert to milliseconds
+    double startMs = (startFrame * 1000.0) / sampleRate;
+    double endMs = (endFrame * 1000.0) / sampleRate;
+    
+    result.first = startMs;
+    result.second = endMs;
+    
+    return result;
+}
+
+QVariantMap AppController::getSegmentTrimBoundaries(int segmentIndex)
+{
+    QVariantMap result;
+    result["trimStartMs"] = -1.0;
+    result["trimEndMs"] = -1.0;
+    
+    if (!m_projectReady) {
+        return result;
+    }
+    
+    SegmentInfo *segment = segmentByDisplayIndex(segmentIndex);
+    if (!segment || !segment->hasRecording || segment->recordingPath.isEmpty()) {
+        return result;
+    }
+    
+    if (!QFileInfo::exists(segment->recordingPath)) {
+        return result;
+    }
+    
+    // If manual boundaries are set, return them
+    if (segment->trimStartMs >= 0 && segment->trimEndMs >= 0) {
+        result["trimStartMs"] = segment->trimStartMs;
+        result["trimEndMs"] = segment->trimEndMs;
+        return result;
+    }
+    
+    // Otherwise, calculate automatic boundaries
+    QByteArray pcm;
+    QAudioFormat format;
+    QString error;
+    if (!WavUtils::readWavFile(segment->recordingPath, pcm, format, &error)) {
+        LOG_WARN() << "Failed to read segment recording for trim boundaries:" << segment->recordingPath << error;
+        return result;
+    }
+    
+    QPair<double, double> boundaries = calculateTrimBoundaries(pcm, format, m_segmentNoiseThreshold);
+    result["trimStartMs"] = boundaries.first;
+    result["trimEndMs"] = boundaries.second;
+    
+    return result;
+}
+
+void AppController::setSegmentTrimBoundaries(int segmentIndex, double trimStartMs, double trimEndMs)
+{
+    if (!m_projectReady) {
+        return;
+    }
+    
+    SegmentInfo *segment = segmentByDisplayIndex(segmentIndex);
+    if (!segment || !segment->hasRecording) {
+        return;
+    }
+    
+    // Validate boundaries
+    if (trimStartMs < 0 || trimEndMs < 0 || trimStartMs >= trimEndMs) {
+        LOG_WARN() << "Invalid trim boundaries for segment" << segmentIndex 
+                   << "start:" << trimStartMs << "end:" << trimEndMs;
+        return;
+    }
+    
+    segment->trimStartMs = trimStartMs;
+    segment->trimEndMs = trimEndMs;
+    
+    LOG_INFO() << "Set trim boundaries for segment" << segmentIndex 
+               << "start:" << trimStartMs << "ms end:" << trimEndMs << "ms";
+    
+    emit m_project.segmentsUpdated();
+}
+
+void AppController::recreateSegmentsFromBoundaries(const QVariantList &boundariesMs)
+{
+    if (!m_projectReady) {
+        setStatusMessage(tr("Проект не загружен"));
+        LOG_WARN() << "Cannot recreate segments: project not ready";
+        return;
+    }
+    
+    const AudioBuffer &buffer = m_project.originalBuffer();
+    if (!buffer.format().isValid() || buffer.frameCount() == 0) {
+        setStatusMessage(tr("Аудио данные недоступны"));
+        LOG_WARN() << "Cannot recreate segments: buffer is empty or invalid";
+        return;
+    }
+    
+    const qint64 sampleRate = buffer.format().sampleRate();
+    if (sampleRate <= 0) {
+        setStatusMessage(tr("Неверный формат аудио"));
+        LOG_WARN() << "Cannot recreate segments: invalid sample rate";
+        return;
+    }
+    
+    const qint64 totalFrames = buffer.frameCount();
+    const double totalDurationMs = (totalFrames * 1000.0) / sampleRate;
+    
+    // Convert boundaries from milliseconds to frames and sort
+    QVector<qint64> boundariesFrames;
+    boundariesFrames.reserve(boundariesMs.size());
+    
+    for (const QVariant &boundary : boundariesMs) {
+        double ms = boundary.toDouble();
+        // Clamp to valid range
+        ms = qBound(0.0, ms, totalDurationMs);
+        qint64 frame = static_cast<qint64>((ms * sampleRate) / 1000.0);
+        frame = qBound(0LL, frame, totalFrames);
+        boundariesFrames.append(frame);
+    }
+    
+    // Sort boundaries
+    std::sort(boundariesFrames.begin(), boundariesFrames.end());
+    
+    // Remove duplicates and ensure we have boundaries at start and end
+    QVector<qint64> uniqueBoundaries;
+    uniqueBoundaries.append(0); // Always start at 0
+    for (qint64 frame : boundariesFrames) {
+        if (frame > 0 && frame < totalFrames && 
+            (uniqueBoundaries.isEmpty() || frame != uniqueBoundaries.last())) {
+            uniqueBoundaries.append(frame);
+        }
+    }
+    if (uniqueBoundaries.last() != totalFrames) {
+        uniqueBoundaries.append(totalFrames); // Always end at totalFrames
+    }
+    
+    // Create segments from boundaries
+    // IMPORTANT: Create segments from end to start (same order as splitIntoSegments)
+    // This ensures consistent display order in the list
+    auto &segments = m_project.segments();
+    segments.clear();
+    
+    const qint64 minFrames = sampleRate; // 1 second minimum
+    
+    // Build segments from end to start to match splitIntoSegments order
+    // This ensures the array order is [end of song, ..., start of song]
+    // which matches the display order in the list
+    int displayIndex = 1;
+    
+    for (int i = uniqueBoundaries.size() - 2; i >= 0; --i) {
+        qint64 startFrame = uniqueBoundaries[i];
+        qint64 endFrame = uniqueBoundaries[i + 1];
+        qint64 frameCount = endFrame - startFrame;
+        
+        // Skip segments shorter than 1 second (except if it's the only segment)
+        if (frameCount < minFrames && uniqueBoundaries.size() > 2) {
+            continue;
+        }
+        
+        SegmentInfo info;
+        info.displayIndex = displayIndex++;
+        info.startFrame = startFrame;
+        info.frameCount = frameCount;
+        info.durationMs = static_cast<qint64>((static_cast<double>(frameCount) / sampleRate) * 1000.0);
+        segments.append(info);
+    }
+    
+    // Reset segment statuses (recordings are lost when boundaries change)
+    m_project.resetSegmentStatuses();
+    
+    LOG_INFO() << "Recreated" << segments.size() << "segments from" << uniqueBoundaries.size() << "boundaries";
+    setStatusMessage(tr("Отрезки пересозданы: %1").arg(segments.size()));
+    
+    emit m_project.segmentsUpdated();
+    emit segmentLengthChanged();
 }
 
 
