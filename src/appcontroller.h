@@ -118,7 +118,7 @@ public:
     // Get segment start time in milliseconds
     Q_INVOKABLE double getSegmentStartMs(int segmentIndex);
     Q_INVOKABLE double getSegmentRecordingTrimmedStartMs(int segmentIndex);
-    Q_INVOKABLE void recreateSegmentsFromBoundaries(const QVariantList &boundariesMs);
+    Q_INVOKABLE void recreateSegmentsFromBoundaries(const QVariantList &boundariesMs, bool manualBoundaries = false);
     Q_INVOKABLE QVariantMap getSegmentTrimBoundaries(int segmentIndex);
     Q_INVOKABLE void setSegmentTrimBoundaries(int segmentIndex, double trimStartMs, double trimEndMs);
 

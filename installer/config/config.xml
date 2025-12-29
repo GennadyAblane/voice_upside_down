@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Installer>
+    <Name>Voice Upside Down</Name>
+    <Version>1.0.0</Version>
+    <Title>Voice Upside Down Installer</Title>
+    <Publisher>VoiceUpsideDown</Publisher>
+    <ProductUrl>https://voiceupside.local</ProductUrl>
+    <StartMenuDir>Voice Upside Down</StartMenuDir>
+    <TargetDir>@HomeDir@/VoiceUpsideDown</TargetDir>
+</Installer>
+

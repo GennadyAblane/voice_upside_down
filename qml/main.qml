@@ -795,18 +795,20 @@ import "theme" as Theme
             delegate: Loader {
                 id: screenSnowflakeLoader
                 sourceComponent: screenSnowflakeStyle
-                x: ((index * 73 + index * 41 + index * 19) % window.width)
+                x: ((index * 73 + index * 41 + index * 19) % Math.max(1, window.width))
                 y: -5
                 
                 property real horizontalDrift: ((index % 7) - 3) * 1.2
-                property real startX: ((index * 73 + index * 41 + index * 19) % window.width)
+                property real startX: ((index * 73 + index * 41 + index * 19) % Math.max(1, window.width))
                 property real startDelay: (index * 97) % 3000 // Random delay up to 3 seconds
                 
                 SequentialAnimation on y {
+                    id: yAnimation
                     running: true // Always running
                     loops: Animation.Infinite
                     PauseAnimation { duration: screenSnowflakeLoader.startDelay }
                     NumberAnimation {
+                        id: fallAnimation
                         to: window.height + 5
                         duration: 4000 + (index % 7) * 1000
                         easing.type: Easing.Linear
@@ -814,7 +816,7 @@ import "theme" as Theme
                     PropertyAction {
                         target: screenSnowflakeLoader
                         property: "x"
-                        value: ((index * 73 + index * 41 + index * 19 + (index % 13) * 23) % window.width)
+                        value: ((index * 73 + index * 41 + index * 19 + (index % 13) * 23) % Math.max(1, window.width))
                     }
                     PropertyAction {
                         target: screenSnowflakeLoader
@@ -829,18 +831,47 @@ import "theme" as Theme
                 }
                 
                 SequentialAnimation on x {
+                    id: xAnimation
                     running: true // Always running
                     loops: Animation.Infinite
                     PauseAnimation { duration: screenSnowflakeLoader.startDelay }
                     NumberAnimation {
+                        id: driftRightAnimation
                         to: screenSnowflakeLoader.startX + screenSnowflakeLoader.horizontalDrift * 40
                         duration: 4000 + (index % 7) * 1000
                         easing.type: Easing.InOutSine
                     }
                     NumberAnimation {
+                        id: driftLeftAnimation
                         to: screenSnowflakeLoader.startX - screenSnowflakeLoader.horizontalDrift * 40
                         duration: 4000 + (index % 7) * 1000
                         easing.type: Easing.InOutSine
+                    }
+                }
+                
+                // Restart animations when window size changes
+                Connections {
+                    target: window
+                    function onWidthChanged() {
+                        // Update startX based on new width
+                        screenSnowflakeLoader.startX = ((index * 73 + index * 41 + index * 19) % Math.max(1, window.width))
+                        // Update drift animation targets
+                        if (driftRightAnimation) {
+                            driftRightAnimation.to = screenSnowflakeLoader.startX + screenSnowflakeLoader.horizontalDrift * 40
+                        }
+                        if (driftLeftAnimation) {
+                            driftLeftAnimation.to = screenSnowflakeLoader.startX - screenSnowflakeLoader.horizontalDrift * 40
+                        }
+                        // Restart x animation to apply new values
+                        xAnimation.restart()
+                    }
+                    function onHeightChanged() {
+                        // Update fall animation target
+                        if (fallAnimation) {
+                            fallAnimation.to = window.height + 5
+                        }
+                        // Restart y animation to apply new value
+                        yAnimation.restart()
                     }
                 }
             }
@@ -1022,26 +1053,95 @@ import "theme" as Theme
         property var waveformVolumeData: []
         property var waveformSegments: []
         property var editedBoundaries: []  // Временные границы, редактируемые пользователем
+        property var savedBoundaries: []  // Сохраненные границы для восстановления при открытии
+        
+        // Сбросить сохраненные границы при изменении длины отрезков
+        // НО: не сбрасывать, если изменения были применены из диалога (чтобы не терять границы)
+        property bool applyingBoundaryChanges: false
+        
+        Connections {
+            target: controller
+            function onSegmentLengthChanged() {
+                // Не сбрасывать границы, если мы только что применили изменения из диалога
+                if (settingsDialog.applyingBoundaryChanges) {
+                    console.log("Segment length changed after applying boundaries - keeping saved boundaries")
+                    settingsDialog.applyingBoundaryChanges = false
+                    return
+                }
+                
+                console.log("Segment length changed - resetting saved boundaries and forcing recreation")
+                settingsDialog.savedBoundaries = []
+                // Принудительно очистить границы и установить флаг для пересоздания
+                if (waveformView) {
+                    waveformView.boundaries = []
+                    waveformView.forceRecreateBoundaries = true
+                    console.log("Forced boundaries recreation - new segments will create new boundaries")
+                }
+            }
+        }
         
         // Обновить данные waveform при открытии диалога или изменении порога
         onVisibleChanged: {
             if (visible && controller && controller.projectReady) {
-                updateWaveformData()
-                // Инициализировать editedBoundaries текущими границами
-                editedBoundaries = []
-                var segData = controller.getSegmentDataForWaveform()
-                for (var i = 0; i < segData.length; i++) {
-                    editedBoundaries.push(segData[i].startMs)
+                // Если есть сохраненные границы, восстановить их ПЕРЕД обновлением данных
+                // Это предотвратит пересоздание границ в onSegmentsChanged
+                if (savedBoundaries && savedBoundaries.length > 0) {
+                    console.log("Restoring saved boundaries BEFORE updateWaveformData:", savedBoundaries)
+                    waveformView.boundaries = savedBoundaries.slice()  // Copy array
                 }
-                // Добавить конечную границу
-                if (segData.length > 0) {
-                    var lastSeg = segData[segData.length - 1]
-                    if (lastSeg.endMs) {
-                        editedBoundaries.push(lastSeg.endMs)
+                
+                // Теперь обновляем данные - onSegmentsChanged не пересоздаст границы, если они уже установлены
+                updateWaveformData()
+                
+                // Если границы не были восстановлены, инициализировать из текущих отрезков
+                if (!savedBoundaries || savedBoundaries.length === 0) {
+                    editedBoundaries = []
+                    var segData = controller.getSegmentDataForWaveform()
+                    for (var i = 0; i < segData.length; i++) {
+                        editedBoundaries.push(segData[i].startMs)
                     }
+                    // Добавить конечную границу
+                    if (segData.length > 0) {
+                        var lastSeg = segData[segData.length - 1]
+                        if (lastSeg.endMs) {
+                            editedBoundaries.push(lastSeg.endMs)
+                        }
+                    }
+                } else {
+                    // Убедиться, что сегменты синхронизированы с восстановленными границами
+                    // Восстановленные границы - это источник истины, они должны использоваться как есть
+                    Qt.callLater(function() {
+                        if (waveformView.boundaries && waveformView.boundaries.length > 0) {
+                            console.log("Synchronizing segments with restored boundaries (count:", waveformView.boundaries.length, ")")
+                            // Создать editableSegments структуру, если её нет
+                            if (!waveformView.editableSegments || waveformView.editableSegments.length === 0) {
+                                var segData = controller.getSegmentDataForWaveform()
+                                waveformView.editableSegments = []
+                                for (var i = 0; i < segData.length; i++) {
+                                    waveformView.editableSegments.push({
+                                        index: segData[i].index,
+                                        startMs: segData[i].startMs,
+                                        endMs: segData[i].endMs
+                                    })
+                                }
+                            }
+                            // Обновить сегменты из границ (границы - источник истины)
+                            waveformView.updateSegmentsFromBoundaries()
+                        }
+                    })
                 }
             } else if (!visible) {
-                // При закрытии применяем изменения
+                // При закрытии сохраняем текущие границы ПЕРЕД применением изменений
+                // Это важно, потому что applyBoundaryChanges может изменить количество отрезков
+                // и мы хотим сохранить именно те границы, которые были установлены пользователем
+                if (waveformView.boundaries && waveformView.boundaries.length > 0) {
+                    savedBoundaries = waveformView.boundaries.slice()  // Copy array
+                    console.log("Saving boundaries before applying (count:", savedBoundaries.length, "):", savedBoundaries)
+                } else {
+                    // Если границы не установлены, очистить сохраненные
+                    savedBoundaries = []
+                    console.log("No boundaries to save, clearing savedBoundaries")
+                }
                 applyBoundaryChanges()
             }
         }
@@ -1049,24 +1149,36 @@ import "theme" as Theme
         function applyBoundaryChanges() {
             if (!controller || !controller.projectReady) return
             
-            // Собрать все границы из editableSegments waveformView
-            var boundaries = []
-            if (waveformView.editableSegments && waveformView.editableSegments.length > 0) {
-                for (var i = 0; i < waveformView.editableSegments.length; i++) {
-                    boundaries.push(waveformView.editableSegments[i].startMs)
+            // NEW LOGIC: Use boundaries array directly from waveformView
+            var boundariesToApply = []
+            if (waveformView.boundaries && waveformView.boundaries.length > 0) {
+                // Use the boundaries array directly - it's already sorted and synchronized
+                boundariesToApply = waveformView.boundaries
+                console.log("NEW: Applying boundary changes from boundaries array:", boundariesToApply)
+            } else if (waveformView.editableSegments && waveformView.editableSegments.length > 0) {
+                // Fallback: extract from segments if boundaries array not available
+                var segs = waveformView.editableSegments
+                for (var i = 0; i < segs.length; i++) {
+                    boundariesToApply.push(segs[i].startMs)
                 }
-                // Добавить конечную границу
-                var lastSeg = waveformView.editableSegments[waveformView.editableSegments.length - 1]
+                var lastSeg = segs[segs.length - 1]
                 if (lastSeg.endMs) {
-                    boundaries.push(lastSeg.endMs)
+                    boundariesToApply.push(lastSeg.endMs)
                 }
+                console.log("Fallback: Applying boundary changes from segments:", boundariesToApply)
             } else {
                 // Если не было редактирования, использовать текущие границы
-                boundaries = editedBoundaries
+                boundariesToApply = editedBoundaries
+                console.log("Using editedBoundaries:", boundariesToApply)
             }
             
-            if (boundaries.length > 0) {
-                controller.recreateSegmentsFromBoundaries(boundaries)
+            if (boundariesToApply.length > 0) {
+                // Установить флаг, чтобы не сбрасывать границы при segmentLengthChanged
+                applyingBoundaryChanges = true
+                // Передать информацию о том, что границы были установлены вручную
+                var isManual = waveformView.manualBoundaries
+                controller.recreateSegmentsFromBoundaries(boundariesToApply, isManual)
+                // Флаг будет сброшен в onSegmentLengthChanged
             }
         }
         
@@ -1122,8 +1234,8 @@ import "theme" as Theme
         Rectangle {
             id: settingsDialogContent
             anchors.centerIn: parent
-            width: 700
-            height: 600
+            width: window.width - 80  // Ширина основного окна с небольшими отступами (40px с каждой стороны)
+            height: Math.min(600, window.height - 80)  // Высота адаптивная, но не больше окна с отступами
             color: Theme.Theme.colors.sectionBackground
             radius: Theme.Theme.cornerRadius
             

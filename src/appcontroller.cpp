@@ -1899,7 +1899,7 @@ void AppController::setSegmentTrimBoundaries(int segmentIndex, double trimStartM
     emit m_project.segmentsUpdated();
 }
 
-void AppController::recreateSegmentsFromBoundaries(const QVariantList &boundariesMs)
+void AppController::recreateSegmentsFromBoundaries(const QVariantList &boundariesMs, bool manualBoundaries)
 {
     if (!m_projectReady) {
         setStatusMessage(tr("Проект не загружен"));
@@ -1953,6 +1953,19 @@ void AppController::recreateSegmentsFromBoundaries(const QVariantList &boundarie
         uniqueBoundaries.append(totalFrames); // Always end at totalFrames
     }
     
+    // Delete all existing reverse files before recreating segments
+    // because segments will be recreated with new frame boundaries
+    const QString cutsDir = PathUtils::defaultCutsRoot();
+    if (QDir(cutsDir).exists()) {
+        const QStringList filters = QStringList() << "segment_*_reverse.wav";
+        const QFileInfoList files = QDir(cutsDir).entryInfoList(filters, QDir::Files);
+        for (const QFileInfo &fileInfo : files) {
+            if (QFile::remove(fileInfo.absoluteFilePath())) {
+                LOG_INFO() << "Removed old reverse file due to boundary changes:" << fileInfo.absoluteFilePath();
+            }
+        }
+    }
+    
     // Create segments from boundaries
     // IMPORTANT: Create segments from end to start (same order as splitIntoSegments)
     // This ensures consistent display order in the list
@@ -1960,19 +1973,34 @@ void AppController::recreateSegmentsFromBoundaries(const QVariantList &boundarie
     segments.clear();
     
     const qint64 minFrames = sampleRate; // 1 second minimum
+    const qint64 minFramesFirstLast = static_cast<qint64>(sampleRate * 0.75); // 0.75 seconds for first/last segments
     
     // Build segments from end to start to match splitIntoSegments order
     // This ensures the array order is [end of song, ..., start of song]
     // which matches the display order in the list
     int displayIndex = 1;
     
+    const int totalBoundaries = uniqueBoundaries.size();
+    
     for (int i = uniqueBoundaries.size() - 2; i >= 0; --i) {
         qint64 startFrame = uniqueBoundaries[i];
         qint64 endFrame = uniqueBoundaries[i + 1];
         qint64 frameCount = endFrame - startFrame;
         
+        // Check if this is the first segment (i == totalBoundaries - 2) or last segment (i == 0)
+        bool isFirstSegment = (i == totalBoundaries - 2);
+        bool isLastSegment = (i == 0);
+        
+        // Special rule: skip first or last segment if shorter than 0.75 seconds
+        if ((isFirstSegment || isLastSegment) && frameCount < minFramesFirstLast) {
+            LOG_INFO() << "Skipping" << (isFirstSegment ? "first" : "last") << "segment: too short (" 
+                       << (frameCount * 1000.0 / sampleRate) << "ms < 750ms)";
+            continue;
+        }
+        
         // Skip segments shorter than 1 second (except if it's the only segment)
-        if (frameCount < minFrames && uniqueBoundaries.size() > 2) {
+        // BUT: if boundaries were set manually, don't skip short segments (except first/last)
+        if (!manualBoundaries && frameCount < minFrames && uniqueBoundaries.size() > 2) {
             continue;
         }
         
